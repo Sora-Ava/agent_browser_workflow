@@ -1,3 +1,4 @@
+import { listenLocal } from "../tests/support/listen.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { demoWorkflow } from "../shared/demo-workflow.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "abw-real-"));
 const app = createApp(dir, `abw-smoke-${Date.now()}`);
-await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+await listenLocal(app.server);
 const port = (app.server.address() as { port: number }).port;
 const base = `http://127.0.0.1:${port}`;
 async function api(path: string, method = "GET", body?: unknown) {
@@ -31,6 +32,7 @@ async function waitRun() {
   throw new Error("run timeout");
 }
 try {
+  await api("browser/start", "POST", { url: base + "/demo" });
   await app.config.update({
     baseUrl: "http://127.0.0.1:1/v1",
     apiKey: "",
@@ -149,7 +151,7 @@ try {
       }),
     );
   });
-  await new Promise<void>((r) => provider.listen(0, "127.0.0.1", r));
+  await listenLocal(provider);
   try {
     await app.config.update({
       baseUrl: `http://127.0.0.1:${(provider.address() as any).port}/v1`,

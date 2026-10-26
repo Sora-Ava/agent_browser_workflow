@@ -18,6 +18,38 @@ export class Store {
     this.db.exec(
       "INSERT OR IGNORE INTO workflow_versions SELECT id,id,NULL,1 FROM workflows",
     );
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS session_state(id TEXT PRIMARY KEY,body TEXT NOT NULL)",
+    );
+  }
+  conversation() {
+    const row = this.db
+      .prepare("SELECT body FROM session_state WHERE id='conversation'")
+      .get() as any;
+    return row ? JSON.parse(row.body) : undefined;
+  }
+  saveConversation(value: unknown) {
+    this.db
+      .prepare("INSERT OR REPLACE INTO session_state VALUES('conversation',?)")
+      .run(JSON.stringify(value));
+  }
+  deleteWorkflow(id: string, allVersions = false) {
+    const meta = this.db
+      .prepare("SELECT root_id FROM workflow_versions WHERE id=?")
+      .get(id) as any;
+    if (
+      !meta ||
+      !this.db.prepare("SELECT id FROM workflows WHERE id=?").get(id)
+    )
+      throw new Error("流程不存在");
+    const result = allVersions
+      ? this.db
+          .prepare(
+            "DELETE FROM workflows WHERE id IN (SELECT id FROM workflow_versions WHERE root_id=?)",
+          )
+          .run(meta.root_id)
+      : this.db.prepare("DELETE FROM workflows WHERE id=?").run(id);
+    return Number(result.changes);
   }
   save(input: Workflow) {
     const body = workflowSchema.parse(input);

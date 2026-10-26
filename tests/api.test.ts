@@ -1,3 +1,4 @@
+import { listenLocal } from "./support/listen.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +10,7 @@ import { createServer } from "node:http";
 test("API rejects foreign origins and invalid runs, and never returns API keys", async () => {
   const dir = await mkdtemp(join(tmpdir(), "abw-api-"));
   const app = createApp(dir);
-  await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+  await listenLocal(app.server);
   const address = app.server.address() as { port: number };
   const base = `http://127.0.0.1:${address.port}`;
   try {
@@ -67,7 +68,7 @@ test("pause waits for current command, blocks another run, and cancel releases p
     return {};
   };
   app.browser.screenshot = async () => Buffer.from("frame");
-  await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+  await listenLocal(app.server);
   const base = `http://127.0.0.1:${(app.server.address() as any).port}`;
   const request = (path: string, input?: unknown) =>
     fetch(base + "/api/" + path, {
@@ -78,6 +79,7 @@ test("pause waits for current command, blocks another run, and cancel releases p
   const state = async () =>
     ((await (await fetch(base + "/api/state")).json()) as any).active;
   try {
+    await request("browser/start", { url: "http://example.local" });
     const saved = app.store.save({
       name: "pause",
       startUrl: "http://example.local",
@@ -99,6 +101,11 @@ test("pause waits for current command, blocks another run, and cancel releases p
     assert.equal((await state()).status, "paused");
     assert.equal(presses, 1);
     assert.equal((await request("replay", input)).status, 409);
+    assert.equal(
+      (await fetch(base + "/api/workflows/" + saved.id, { method: "DELETE" }))
+        .status,
+      409,
+    );
     await request("cancel");
     for (let i = 0; i < 30 && (await state()).status !== "cancelled"; i++)
       await new Promise((r) => setTimeout(r, 10));
@@ -147,8 +154,8 @@ test("successful locator repair persists a new version while original remains im
       }),
     );
   });
-  await new Promise<void>((r) => model.listen(0, "127.0.0.1", r));
-  await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+  await listenLocal(model);
+  await listenLocal(app.server);
   const base = `http://127.0.0.1:${(app.server.address() as any).port}`;
   try {
     await app.config.update({
@@ -156,6 +163,11 @@ test("successful locator repair persists a new version while original remains im
       apiKey: "",
       model: "contract-model",
       downloadDir: dir,
+    });
+    await fetch(base + "/api/browser/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
     });
     const original = app.store.save({
       name: "repair",
@@ -232,9 +244,15 @@ test("run stays busy until final screenshot completes so terminal status permits
     if (++captures === 2) await pending;
     return Buffer.from("frame");
   };
-  await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+  await listenLocal(app.server);
   const base = `http://127.0.0.1:${(app.server.address() as any).port}`;
   try {
+    await fetch(base + "/api/browser/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    captures = 0;
     const saved = app.store.save({
       name: "test",
       startUrl: "http://example.local",

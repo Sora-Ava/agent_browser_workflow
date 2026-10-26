@@ -1,3 +1,4 @@
+import { listenLocal } from "../tests/support/listen.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -13,11 +14,11 @@ const site = createServer((_req, res) => {
     `<!doctype html><h1 id="counter">0</h1><button id="new-query" onclick="document.querySelector('#result').hidden=false;document.body.dataset.clicks=String(Number(document.body.dataset.clicks||0)+1)">查询</button><p id="result" hidden>查询完成</p><script>let n=0;setInterval(()=>document.querySelector('#counter').textContent=String(++n),150);setTimeout(()=>{const e=document.createElement('p');e.id='manual-ready';e.textContent='准备完成';document.body.append(e)},4000)</script>`,
   );
 });
-await new Promise<void>((r) => site.listen(0, "127.0.0.1", r));
+await listenLocal(site);
 const target = `http://127.0.0.1:${(site.address() as any).port}`;
 const app = createApp(dir, `abw-control-${Date.now()}`);
 const ui = new Browser(join(dir, "ui"), `abw-ui-control-${Date.now()}`);
-await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", r));
+await listenLocal(app.server);
 const base = `http://127.0.0.1:${(app.server.address() as any).port}`;
 async function api(path: string, body?: unknown) {
   const response = await fetch(
@@ -51,6 +52,7 @@ let frames = 0;
 let streamRead: Promise<void> | undefined;
 let model: ReturnType<typeof createServer> | undefined;
 try {
+  await api("browser/start", { url: target });
   await app.config.update({
     baseUrl: "http://127.0.0.1:1/v1",
     model: "disabled",
@@ -159,7 +161,7 @@ try {
       }),
     );
   });
-  await new Promise<void>((r) => model!.listen(0, "127.0.0.1", r));
+  await listenLocal(model!);
   await app.config.update({
     baseUrl: `http://127.0.0.1:${(model.address() as any).port}/v1`,
     model: "scripted-repair-contract",

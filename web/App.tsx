@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { Workflow, Step } from "../shared/workflow.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
 
@@ -76,6 +76,62 @@ function Icon({ name }: { name: string }) {
     </svg>
   );
 }
+function DeleteDialog({
+  target,
+  allVersions,
+  setAllVersions,
+  onCancel,
+  onDelete,
+  busy,
+}: {
+  target: any;
+  allVersions: boolean;
+  setAllVersions: (value: boolean) => void;
+  onCancel: () => void;
+  onDelete: () => void;
+  busy: boolean;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    ref.current?.showModal();
+    return () => ref.current?.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="delete-dialog"
+      aria-labelledby="delete-title"
+      onCancel={onCancel}
+    >
+      <h2 id="delete-title">删除流程</h2>
+      <p>
+        删除“{target.name}”的版本 {target.version || 1}
+        ？运行历史、账号凭据和下载文件会保留。
+      </p>
+      <label className="delete-scope">
+        <input
+          type="checkbox"
+          checked={allVersions}
+          onChange={(e) => setAllVersions(e.target.checked)}
+        />
+        同时删除该流程的全部版本
+      </label>
+      <div className="dialog-actions">
+        <button
+          className="secondary"
+          autoFocus
+          disabled={busy}
+          onClick={onCancel}
+        >
+          取消
+        </button>
+        <button className="delete-confirm" disabled={busy} onClick={onDelete}>
+          {allVersions ? "删除全部版本" : "删除此版本"}
+        </button>
+      </div>
+    </dialog>
+  );
+}
 
 export function App() {
   const [view, setView] = useState("work");
@@ -86,7 +142,7 @@ export function App() {
   const [state, setState] = useState<any>({ history: [] });
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [startUrl, setStartUrl] = useState("http://127.0.0.1:3001/demo");
+  const [startUrl, setStartUrl] = useState("");
   const [instruction, setInstruction] = useState("");
   const [draft, setDraft] = useState<Workflow | null>(null);
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
@@ -94,6 +150,9 @@ export function App() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleteAll, setDeleteAll] = useState(false);
+  const chatEnd = useRef<HTMLDivElement>(null);
   const [credential, setCredential] = useState({
     origin: "http://127.0.0.1:3001",
     alias: "",
@@ -103,6 +162,7 @@ export function App() {
   const running = ["running", "pausing", "paused", "repairing"].includes(
     state.active?.status,
   );
+  const browserReady = state.browser?.status === "ready";
   async function refresh() {
     const [s, w, c] = await Promise.all([
       api("settings"),
@@ -149,8 +209,17 @@ export function App() {
     return () => events.close();
   }, []);
   useEffect(() => {
-    setDraft(state.active?.draft || null);
-  }, [state.active?.id, state.active?.status]);
+    if (!selected) setDraft(state.conversation?.draft || null);
+  }, [
+    state.active?.id,
+    state.active?.status,
+    state.conversation?.id,
+    state.conversation?.steps?.length,
+    selected?.id,
+  ]);
+  useEffect(() => {
+    chatEnd.current?.scrollIntoView({ block: "nearest" });
+  }, [state.conversation?.messages?.length]);
   useEffect(() => {
     const run = state.active;
     if (run?.repairedVersionId && !running)
@@ -197,6 +266,50 @@ export function App() {
     await refresh();
     choose(saved);
     setNotice("流程已保存，下次填写参数即可运行。");
+  }
+  async function launchBrowser() {
+    await api("browser/start", "POST", {
+      url: selected?.startUrl || startUrl.trim() || undefined,
+    });
+    setState(await api("state"));
+    setNotice("浏览器已启动，可以逐条发送指令。");
+  }
+  async function sendInstruction() {
+    if (!instruction.trim()) return;
+    await api("chat", "POST", {
+      instruction: instruction.trim(),
+      credentialId: credentialId || undefined,
+    });
+    setInstruction("");
+    setState(await api("state"));
+  }
+  async function newConversation() {
+    if (
+      state.conversation?.steps?.length &&
+      !window.confirm(
+        "新建会话会清空尚未保存的对话录制；已保存流程不受影响。继续吗？",
+      )
+    )
+      return;
+    await api("conversation/reset", "POST");
+    setSelected(null);
+    setDraft(null);
+    setInstruction("");
+    setState(await api("state"));
+  }
+  async function deleteWorkflow() {
+    await api(
+      "workflows/" + deleteTarget.id + "?allVersions=" + deleteAll,
+      "DELETE",
+    );
+    const list = await api("workflows");
+    setWorkflows(list);
+    if (selected && !list.some((w: any) => w.id === selected.id)) {
+      setSelected(null);
+      setDraft(state.conversation?.draft || null);
+    }
+    setDeleteTarget(null);
+    setNotice("流程已删除，历史记录和下载文件已保留。");
   }
   const active = state.active;
   return (
@@ -290,31 +403,56 @@ export function App() {
           <>
             <div className="page-heading">
               <div>
-                <h1>{selected ? selected.name : "让浏览器，完成重复的事。"}</h1>
+                <h1>{selected ? selected.name : "逐步指挥浏览器"}</h1>
                 <p>
                   {selected
                     ? "填写本次参数，复用已经保存的操作。"
-                    : "描述一次，保存流程。下次只需换个参数。"}
+                    : "每次发送一条指令，执行完成后等待你继续。"}
                 </p>
               </div>
-              <button
-                className="secondary"
-                onClick={() => {
-                  setSelected(null);
-                  setDraft(null);
-                  setInstruction("");
-                }}
-              >
-                ＋ 新建任务
-              </button>
+              <div className="workspace-actions">
+                <button
+                  className={browserReady ? "secondary" : "primary"}
+                  disabled={
+                    busy ||
+                    running ||
+                    browserReady ||
+                    state.browser?.status === "starting"
+                  }
+                  onClick={() => act(launchBrowser)}
+                >
+                  {browserReady
+                    ? "浏览器已启动"
+                    : state.browser?.status === "starting"
+                      ? "启动中…"
+                      : "启动浏览器"}
+                </button>
+                {selected && (
+                  <button
+                    className="secondary"
+                    onClick={() => setSelected(null)}
+                  >
+                    返回对话
+                  </button>
+                )}
+                <button
+                  className="secondary"
+                  disabled={busy || running}
+                  onClick={() => act(newConversation)}
+                >
+                  ＋ 新建会话
+                </button>
+              </div>
             </div>
             <div className="workspace">
               <section className="control-panel">
                 <div className="panel-title">
                   <span className="section-number">1</span>
-                  <h2>{selected ? "运行参数" : "操作指令"}</h2>
+                  <h2>{selected ? "运行参数" : "对话指令"}</h2>
                   <span className="muted">
-                    {selected ? "无需模型" : "自然语言"}
+                    {selected
+                      ? "无需模型"
+                      : `已录制 ${state.conversation?.steps?.length || 0} 步`}
                   </span>
                 </div>
                 {selected ? (
@@ -360,21 +498,68 @@ export function App() {
                   </div>
                 ) : (
                   <div className="form-content">
+                    <div
+                      className="chat-transcript"
+                      role="log"
+                      aria-live="polite"
+                      aria-label="对话记录"
+                    >
+                      {!state.conversation?.messages?.length && (
+                        <div className="chat-welcome">
+                          <strong>你来决定下一步</strong>
+                          <p>
+                            先启动浏览器，然后逐条发送指令，例如“打开产品系统”“填写查询条件”“点击导出”。
+                          </p>
+                        </div>
+                      )}
+                      {state.conversation?.messages?.map(
+                        (message: any, index: number) => (
+                          <div
+                            className={"chat-message " + message.role}
+                            key={index}
+                          >
+                            <span>
+                              {message.role === "user" ? "你" : "浏览器助手"}
+                            </span>
+                            <p>{message.content}</p>
+                          </div>
+                        ),
+                      )}
+                      <div ref={chatEnd} />
+                    </div>
+                    {!browserReady && (
+                      <label>
+                        启动网址（可选）
+                        <input
+                          value={startUrl}
+                          onChange={(e) => setStartUrl(e.target.value)}
+                          placeholder="留空打开浏览器，再用对话指挥"
+                        />
+                      </label>
+                    )}
                     <label>
-                      起始网址
-                      <input
-                        value={startUrl}
-                        onChange={(e) => setStartUrl(e.target.value)}
-                        placeholder="https://你的内网系统"
-                      />
-                    </label>
-                    <label>
-                      你希望完成什么？
+                      下一步做什么？
                       <textarea
-                        rows={5}
+                        rows={3}
                         value={instruction}
                         onChange={(e) => setInstruction(e.target.value)}
-                        placeholder="登录产品系统，查询产品 A。有数据时导出文件，没有数据则结束。"
+                        placeholder={
+                          browserReady
+                            ? "例如：填写已保存的账号密码，先不要登录"
+                            : "先点击“启动浏览器”"
+                        }
+                        onKeyDown={(e) => {
+                          if (
+                            (e.ctrlKey || e.metaKey) &&
+                            e.key === "Enter" &&
+                            !running &&
+                            !busy &&
+                            browserReady
+                          ) {
+                            e.preventDefault();
+                            void act(sendInstruction);
+                          }
+                        }}
                       />
                     </label>
                   </div>
@@ -400,12 +585,19 @@ export function App() {
                   <button
                     className="primary run-button"
                     disabled={
-                      running || busy || (!selected && !instruction.trim())
+                      running ||
+                      busy ||
+                      !browserReady ||
+                      (!selected && !instruction.trim())
                     }
                     onClick={() =>
                       act(async () => {
+                        if (!selected) {
+                          await sendInstruction();
+                          return;
+                        }
                         await api(
-                          selected ? "replay" : "explore",
+                          "replay",
                           "POST",
                           selected
                             ? {
@@ -428,8 +620,13 @@ export function App() {
                       ? statusText[active.status] || "正在运行…"
                       : selected
                         ? "运行流程"
-                        : "开始操作"}
+                        : "发送指令"}
                   </button>
+                  {!selected && (
+                    <p className="composer-hint">
+                      Ctrl + Enter 发送 · 执行后等待下一条指令
+                    </p>
+                  )}
                   {running && (
                     <div className="run-controls">
                       <button
@@ -554,11 +751,15 @@ export function App() {
                         <span />
                         <span />
                       </div>
-                      <h2>浏览器准备就绪</h2>
+                      <h2>
+                        {browserReady ? "浏览器已启动" : "浏览器尚未启动"}
+                      </h2>
                       <p>
-                        输入网址和操作指令开始。
+                        {browserReady
+                          ? "可以开始逐步发送操作指令。"
+                          : "点击“启动浏览器”后才会打开独立浏览器。"}
                         <br />
-                        执行后，这里会显示独立浏览器的页面。
+                        页面实时画面会显示在这里。
                       </p>
                       <button
                         className="text-button"
@@ -621,7 +822,7 @@ export function App() {
             {draft && !running && (
               <section className="draft-panel">
                 <div>
-                  <h2>确认参数，保存这次操作</h2>
+                  <h2>保存本次对话录制的完整流程（{draft.steps.length} 步）</h2>
                   <p>
                     自动识别的参数可修改；未参数化的输入会保持首次执行时的值。
                   </p>
@@ -674,7 +875,7 @@ export function App() {
                   disabled={busy}
                   onClick={() => act(saveDraft)}
                 >
-                  保存流程
+                  保存完整流程
                 </button>
               </section>
             )}
@@ -691,27 +892,36 @@ export function App() {
             ) : (
               <div className="flow-list">
                 {workflows.map((w) => (
-                  <button
-                    className="flow-row"
-                    key={w.id}
-                    onClick={() => choose(w)}
-                  >
-                    <span className="flow-symbol">
-                      <Icon name="grid" />
-                    </span>
-                    <span>
-                      <strong>
-                        {w.name}{" "}
-                        <span className="version-badge">
-                          版本 {w.version || 1}
-                        </span>
-                      </strong>
-                      <small>{w.startUrl}</small>
-                    </span>
-                    <span>{w.steps.length} 个步骤</span>
-                    <span>{w.parameters.length} 个参数</span>
-                    <span>运行</span>
-                  </button>
+                  <article className="flow-entry" key={w.id}>
+                    <button className="flow-row" onClick={() => choose(w)}>
+                      <span className="flow-symbol">
+                        <Icon name="grid" />
+                      </span>
+                      <span>
+                        <strong>
+                          {w.name}{" "}
+                          <span className="version-badge">
+                            版本 {w.version || 1}
+                          </span>
+                        </strong>
+                        <small>{w.startUrl}</small>
+                      </span>
+                      <span>{w.steps.length} 个步骤</span>
+                      <span>{w.parameters.length} 个参数</span>
+                      <span>运行</span>
+                    </button>
+                    <button
+                      className="flow-delete"
+                      aria-label={`删除 ${w.name} 版本 ${w.version || 1}`}
+                      disabled={running || busy}
+                      onClick={() => {
+                        setDeleteTarget(w);
+                        setDeleteAll(false);
+                      }}
+                    >
+                      删除
+                    </button>
+                  </article>
                 ))}
               </div>
             )}
@@ -727,7 +937,11 @@ export function App() {
               state.history.map((r: any) => (
                 <article className="history-row" key={r.id}>
                   <strong>
-                    {r.kind === "explore" ? "自然语言操作" : "流程回放"}
+                    {r.kind === "chat"
+                      ? "对话指令"
+                      : r.kind === "explore"
+                        ? "自然语言操作"
+                        : "流程回放"}
                   </strong>
                   <span>{statusText[r.status]}</span>
                   <span>{new Date(r.started).toLocaleString()}</span>
@@ -880,6 +1094,16 @@ export function App() {
               </button>
             </section>
           </div>
+        )}
+        {deleteTarget && (
+          <DeleteDialog
+            target={deleteTarget}
+            allVersions={deleteAll}
+            setAllVersions={setDeleteAll}
+            busy={busy}
+            onCancel={() => setDeleteTarget(null)}
+            onDelete={() => void act(deleteWorkflow)}
+          />
         )}
       </main>
     </div>

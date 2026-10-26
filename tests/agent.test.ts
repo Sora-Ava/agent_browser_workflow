@@ -1,3 +1,4 @@
+import { listenLocal } from "./support/listen.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -62,7 +63,7 @@ test("tool conversation produces a parameterized draft only from recorded action
       }),
     );
   });
-  await new Promise<void>((r) => provider.listen(0, "127.0.0.1", r));
+  await listenLocal(provider);
   const dir = await mkdtemp(join(tmpdir(), "abw-agent-"));
   const config = new Config(dir);
   try {
@@ -88,6 +89,7 @@ test("tool conversation produces a parameterized draft only from recorded action
         onModel: () => {},
       },
     );
+    assert.ok(result.draft);
     assert.deepEqual(result.draft.steps, [
       { type: "fill", selector: "#product", value: { parameter: "product" } },
     ]);

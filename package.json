@@ -12,7 +12,8 @@
     "start": "tsx server/index.ts",
     "test": "tsx --test tests/*.test.ts",
     "test:browser": "tsx scripts/browser-smoke.ts",
-    "test:control": "tsx scripts/control-smoke.ts"
+    "test:control": "tsx scripts/control-smoke.ts",
+    "test:chat": "tsx scripts/chat-smoke.ts"
   },
   "dependencies": {
     "agent-browser": "0.39.2",

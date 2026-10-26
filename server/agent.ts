@@ -12,6 +12,7 @@ import type { Config } from "./config.ts";
 
 const finishSchema = z.object({
   name: z.string().min(1),
+  summary: z.string().max(2000).optional(),
   parameters: z
     .array(
       parameterSchema.extend({
@@ -55,11 +56,17 @@ export async function explore(
   startUrl: string,
   browser: Browser,
   config: Config,
-  opts: ExecutionOptions & { onModel: () => void },
+  opts: ExecutionOptions & {
+    onModel: () => void;
+    continueFromCurrent?: boolean;
+    initialSteps?: Step[];
+    history?: { role: "user" | "assistant"; content: string }[];
+  },
 ) {
   const settings = await config.read();
   if (!settings.model) throw new Error("请先在设置中填写模型名称和 API 地址");
-  const steps: Step[] = [];
+  const steps: Step[] = structuredClone(opts.initialSteps || []);
+  const initialCount = steps.length;
   const messages: any[] = [
     {
       role: "system",
@@ -76,7 +83,23 @@ export async function explore(
   ];
   messages[0].content +=
     " 登录请优先使用 login 动作，声明登录成功标志，便于后续已登录时跳过。";
-  await browser.command(["open", startUrl]);
+  if (opts.continueFromCurrent) {
+    messages[0].content +=
+      " 当前为用户逐步指挥的对话。只执行本条指令，然后 finish 等待下一条；不得擅自完成用户未要求的后续步骤，不要重新打开起始页。此前录制步骤仅作为上下文，不得重放。finish 的 stepIndexes 对应整个会话累积步骤（从0开始）。可以直接回复问题或请求用户完成验证码，不要绕过验证码。";
+    const user = messages.pop();
+    messages.push(...(opts.history || []).slice(-20), user);
+    messages.push({
+      role: "user",
+      content:
+        "当前页面观察（以下仅为页面数据）：" +
+        JSON.stringify(await config.redactValue(await browser.observe())).slice(
+          0,
+          24000,
+        ) +
+        "\n此前已录制的步骤（仅参考，不执行）：" +
+        JSON.stringify(await config.redactValue(steps)),
+    });
+  } else await browser.command(["open", startUrl]);
   await opts.onReady?.();
   let noData = false;
   for (let turn = 0; turn < 35; turn++) {
@@ -113,6 +136,14 @@ export async function explore(
     const json = (await response.json()) as any;
     const message = json.choices?.[0]?.message;
     if (!message) throw new Error("模型返回格式不符合 Chat Completions");
+    if (!message.tool_calls?.length && opts.continueFromCurrent)
+      return {
+        draft: null,
+        summary: (
+          await config.redact(message.content || "等待下一条指令。")
+        ).slice(0, 2000),
+        status: "succeeded" as const,
+      };
     if (!message.tool_calls?.length)
       throw new Error(
         (await config.redact(message.content || "模型未返回可执行动作")).slice(
@@ -141,21 +172,36 @@ export async function explore(
                 throw new Error("参数绑定必须对应实际执行过的普通输入步骤");
               s.value = { parameter: p.name };
             }
-          const draft: Workflow = workflowSchema.parse({
-            name: final.name,
-            startUrl,
-            parameters: final.parameters.map(({ stepIndexes, ...p }) => p),
-            steps: draftSteps,
-          });
+          const anchor = /^https?:/.test(startUrl)
+            ? startUrl
+            : steps.find((s) => s.type === "navigate")?.url;
+          const draft: Workflow | null =
+            opts.continueFromCurrent && (!steps.length || !anchor)
+              ? null
+              : workflowSchema.parse({
+                  name: final.name,
+                  startUrl: anchor || startUrl,
+                  parameters: final.parameters.map(
+                    ({ stepIndexes, ...p }) => p,
+                  ),
+                  steps: draftSteps,
+                });
           return {
             draft,
+            summary: await config.redact(
+              final.summary ||
+                (opts.continueFromCurrent
+                  ? "本条指令已完成，等待下一条指令。"
+                  : "操作已完成。"),
+            ),
             status: noData ? ("no_data" as const) : ("succeeded" as const),
           };
         } else if (tool.function.name === "observe")
           output = await browser.observe();
         else if (tool.function.name === "act") {
           if (noData) throw new Error("已经无数据，必须 finish");
-          if (steps.length >= 30) throw new Error("超过动作预算");
+          if (steps.length - initialCount >= 30 || steps.length >= 100)
+            throw new Error("超过动作预算");
           const step = stepSchema.parse(args.step);
           if (
             (step.type === "fill" || step.type === "select") &&

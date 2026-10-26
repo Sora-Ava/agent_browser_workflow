@@ -1,3 +1,4 @@
+import { listenLocal } from "./support/listen.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseLiveFrame, LiveFrames } from "../server/live.ts";
@@ -53,7 +54,7 @@ test("native disconnected status clears live mode even when websocket remains op
       150,
     );
   });
-  await new Promise<void>((r) => source.listen(0, "127.0.0.1", r));
+  await listenLocal(source);
   const live = new LiveFrames({
     command: async () => ({
       enabled: true,
@@ -97,7 +98,7 @@ test("live frames reach HTTP subscribers and disconnected sockets fall back to s
     socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
     setTimeout(() => socket.destroy(), 150);
   });
-  await new Promise<void>((r) => source.listen(0, "127.0.0.1", r));
+  await listenLocal(source);
   let attempts = 0;
   const live = new LiveFrames({
     command: async () => {
@@ -106,7 +107,7 @@ test("live frames reach HTTP subscribers and disconnected sockets fall back to s
     },
   });
   const target = createServer((_req, res) => live.subscribe(res));
-  await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
+  await listenLocal(target);
   const controller = new AbortController();
   try {
     await live.start();

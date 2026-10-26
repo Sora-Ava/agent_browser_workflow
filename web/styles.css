@@ -865,6 +865,131 @@ textarea::placeholder {
   width: 100%;
   min-width: 0;
 }
+.workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: flex-end;
+}
+.chat-transcript {
+  max-height: 350px;
+  min-height: 150px;
+  overflow: auto;
+  margin-bottom: 20px;
+  padding: 2px 2px 8px;
+  scrollbar-width: thin;
+}
+.chat-welcome {
+  padding: 15px 5px;
+  color: #526580;
+  font-size: 12px;
+}
+.chat-welcome strong {
+  font-weight: 600;
+  color: #172b4d;
+}
+.chat-welcome p {
+  color: #718098;
+  font-size: 11px;
+  margin: 10px 0 0;
+}
+.chat-message {
+  padding: 12px;
+  margin: 0 0 12px;
+  border-radius: 8px;
+  background: #f2f5fa;
+}
+.chat-message.user {
+  background: #edf2ff;
+  margin-left: 18px;
+}
+.chat-message.assistant {
+  margin-right: 12px;
+  border-left: 2px solid #9eb6e3;
+}
+.chat-message > span {
+  font-size: 10px;
+  color: #718098;
+}
+.chat-message p {
+  font-size: 12px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+}
+.composer-hint {
+  font-size: 10px;
+  color: #8995a7;
+  margin: 9px 0 0;
+  text-align: center;
+}
+.flow-entry {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #dde5f0;
+  gap: 8px;
+}
+.flow-entry .flow-row {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+.flow-delete {
+  color: #a33043;
+  font-size: 12px;
+  padding: 10px 15px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.flow-delete:hover {
+  background: #fff0f2;
+}
+.delete-dialog {
+  border: 1px solid #dde5f0;
+  border-radius: 12px;
+  padding: 28px;
+  width: min(440px, calc(100vw - 36px));
+  color: #172b4d;
+  box-shadow: 0 20px 70px #172b4d26;
+}
+.delete-dialog::backdrop {
+  background: #172b4d55;
+}
+.delete-dialog h2 {
+  font-size: 19px;
+  margin-bottom: 15px;
+}
+.delete-dialog p {
+  color: #526580;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.delete-scope {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 20px 0;
+}
+.delete-scope input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: #2055cd;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 25px;
+}
+.delete-confirm {
+  background: #b13448;
+  color: white;
+  border-radius: 6px;
+  padding: 10px 15px;
+  font-size: 12px;
+}
 .run-controls {
   display: flex;
   gap: 8px;

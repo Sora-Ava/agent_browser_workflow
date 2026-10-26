@@ -4,6 +4,31 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../server/store.ts";
+test("deletion can remove one version or an entire family without touching history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "abw-delete-"));
+  const store = new Store(dir);
+  try {
+    const first = store.save({
+      name: "test",
+      startUrl: "http://example.local",
+      parameters: [],
+      steps: [{ type: "press", key: "Tab" }],
+    });
+    const second = store.saveVersion(first.id, store.get(first.id));
+    const unrelated = store.save({ ...store.get(first.id), name: "unrelated" });
+    store.saveRun({ id: "history", status: "succeeded" });
+    assert.equal(store.deleteWorkflow(first.id, false), 1);
+    assert.equal(store.list().length, 2);
+    assert.equal(store.get(second.id).name, "test");
+    assert.equal(store.deleteWorkflow(second.id, true), 1);
+    assert.equal(store.list().length, 1);
+    assert.equal(store.get(unrelated.id).name, "unrelated");
+    assert.equal(store.runs()[0].id, "history");
+  } finally {
+    store.db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 import { DatabaseSync } from "node:sqlite";
 
 test("repaired versions preserve originals and share lineage", async () => {

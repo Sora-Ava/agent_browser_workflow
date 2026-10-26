@@ -21,6 +21,7 @@ import { demoPage } from "./demo.ts";
 import { RunControl } from "./control.ts";
 import { LiveFrames } from "./live.ts";
 import { repairLocator } from "./repair.ts";
+import { Conversation } from "./conversation.ts";
 
 async function body(req: IncomingMessage) {
   let content = "";
@@ -55,6 +56,12 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
   let active: any = null;
   let controller: RunControl | undefined;
   const live = new LiveFrames(browser);
+  const conversation = new Conversation(store.conversation());
+  const browserState: {
+    status: "stopped" | "starting" | "ready" | "error";
+    url?: string;
+    error?: string;
+  } = { status: "stopped" };
   let frame: Buffer | undefined;
   let frameVersion = 0;
   for (const run of store.runs())
@@ -127,6 +134,22 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         await capture();
         if (localController.signal.aborted) outcome = { status: "cancelled" };
         const { repairedWorkflow, ...visibleOutcome } = outcome;
+        if (kind === "chat") {
+          const summary =
+            visibleOutcome.summary ||
+            visibleOutcome.error ||
+            (visibleOutcome.status === "cancelled"
+              ? "本条指令已停止，等待下一条指令。"
+              : "等待下一条指令。");
+          conversation.complete(
+            (run as any).instruction || "",
+            summary,
+            visibleOutcome.draft || null,
+          );
+          store.saveConversation(conversation.state());
+          visibleOutcome.draft = conversation.state().draft;
+          visibleOutcome.summary = summary;
+        }
         if (
           repairedWorkflow &&
           ["succeeded", "no_data"].includes(visibleOutcome.status)
@@ -153,7 +176,19 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         store.saveRun(run);
         controller = undefined;
       }
-    })();
+    })().catch(() => {
+      Object.assign(run, {
+        status: "failed",
+        error: "任务记录整理失败，已执行步骤仍保留；可以新建会话后继续。",
+        finished: new Date().toISOString(),
+      });
+      controller = undefined;
+      try {
+        store.saveRun(run);
+      } catch {
+        /* Keep failure visible in memory if storage is unavailable. */
+      }
+    });
     return run.id;
   }
   const server = createServer(async (req, res) => {
@@ -202,11 +237,59 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
           history: store.runs(),
           frameVersion,
           captureMode: live.mode,
+          browser: browserState,
+          conversation: conversation.state(),
         });
         return;
       }
       if (path === "/api/live" && req.method === "GET") {
         live.subscribe(res);
+        return;
+      }
+      if (path === "/api/browser/start" && req.method === "POST") {
+        const input = z
+          .object({
+            url: z
+              .string()
+              .refine(
+                (s) => s === "about:blank" || /^https?:\/\//.test(s),
+                "请输入 http/https 网址",
+              )
+              .optional(),
+          })
+          .parse(await body(req));
+        if (controller || browserState.status === "starting") {
+          send(res, 409, { error: "已有任务或浏览器正在启动" });
+          return;
+        }
+        browserState.status = "starting";
+        delete browserState.error;
+        try {
+          const opened = await browser.command(
+            input.url ? ["open", input.url] : ["open"],
+          );
+          browserState.url = opened.url || input.url || "about:blank";
+          conversation.begin(browserState.url!);
+          store.saveConversation(conversation.state());
+          await live.start();
+          await capture();
+          browserState.status = "ready";
+          send(res, 200, browserState);
+        } catch (e: any) {
+          browserState.status = "error";
+          browserState.error = await config.redact(e.message);
+          send(res, 400, { error: browserState.error });
+        }
+        return;
+      }
+      if (path === "/api/conversation/reset" && req.method === "POST") {
+        if (controller || browserState.status === "starting") {
+          send(res, 409, { error: "请先停止当前任务再新建会话" });
+          return;
+        }
+        conversation.reset();
+        store.saveConversation(conversation.state());
+        send(res, 200, conversation.state());
         return;
       }
       if (path === "/api/frame" && req.method === "GET") {
@@ -251,6 +334,23 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         send(res, 201, store.save(workflowSchema.parse(await body(req))));
         return;
       }
+      if (path.startsWith("/api/workflows/") && req.method === "DELETE") {
+        if (controller) {
+          send(res, 409, { error: "运行期间不能删除流程" });
+          return;
+        }
+        const id = z
+          .uuid()
+          .parse(decodeURIComponent(path.slice("/api/workflows/".length)));
+        const count = store.deleteWorkflow(
+          id,
+          new URL(req.url!, "http://localhost").searchParams.get(
+            "allVersions",
+          ) === "true",
+        );
+        send(res, 200, { deleted: count });
+        return;
+      }
       if (path === "/api/cancel" && req.method === "POST") {
         controller?.cancel();
         send(res, 200, { ok: true });
@@ -270,7 +370,9 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         return;
       }
       if (
-        (path === "/api/explore" || path === "/api/replay") &&
+        (path === "/api/explore" ||
+          path === "/api/replay" ||
+          path === "/api/chat") &&
         req.method === "POST"
       ) {
         if (controller) {
@@ -278,9 +380,20 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
           return;
         }
         const input =
-          path === "/api/explore"
-            ? startSchema.parse(await body(req))
-            : replaySchema.parse(await body(req));
+          path === "/api/chat"
+            ? z
+                .object({
+                  instruction: z.string().trim().min(1).max(10000),
+                  credentialId: z.string().optional(),
+                })
+                .parse(await body(req))
+            : path === "/api/explore"
+              ? startSchema.parse(await body(req))
+              : replaySchema.parse(await body(req));
+        if (browserState.status !== "ready") {
+          send(res, 409, { error: "请先点击“启动浏览器”" });
+          return;
+        }
         const credential = input.credentialId
           ? await config.credential(input.credentialId)
           : undefined;
@@ -288,19 +401,28 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         await mkdir(settings.downloadDir, { recursive: true });
         const replay = "id" in input ? store.get(input.id) : undefined;
         if (replay && "values" in input) validateValues(replay, input.values);
-        if (credential) {
+        if (credential && path !== "/api/chat") {
           const url =
-            replay?.startUrl || ("startUrl" in input ? input.startUrl : "");
+            replay?.startUrl ||
+            ("startUrl" in input && typeof input.startUrl === "string"
+              ? input.startUrl
+              : "");
           if (new URL(url).origin !== credential.origin)
             throw new Error("起始网址与凭据站点不一致");
         }
         // Reserve the single-run lock before any further await.
-        if (controller) {
-          send(res, 409, { error: "已有任务正在运行" });
+        if (controller || browserState.status !== "ready") {
+          send(res, 409, {
+            error: controller ? "已有任务正在运行" : "浏览器尚未启动完成",
+          });
           return;
         }
         const id = await perform(
-          path === "/api/explore" ? "explore" : "replay",
+          path === "/api/chat"
+            ? "chat"
+            : path === "/api/explore"
+              ? "explore"
+              : "replay",
           async (signal, onStep) => {
             active.startUrl =
               replay?.startUrl ||
@@ -326,10 +448,47 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
               checkpoint: () => control.checkpoint(),
               onReady: () => live.start(),
             };
+            if (path === "/api/chat" && "instruction" in input) {
+              const previous = conversation.state();
+              const safeInstruction = await config.redact(input.instruction);
+              active.instruction = safeInstruction;
+              conversation.beginTurn(safeInstruction);
+              store.saveConversation(conversation.state());
+              const location = await controlledBrowser.command(["get", "url"]);
+              conversation.begin(
+                location.url || browserState.url || "about:blank",
+              );
+              const result = await explore(
+                input.instruction,
+                conversation.state().startUrl || location.url || "about:blank",
+                controlledBrowser,
+                config,
+                {
+                  ...opts,
+                  continueFromCurrent: true,
+                  initialSteps: previous.steps,
+                  history: previous.messages,
+                  onStep: async (step, index, output) => {
+                    conversation.record(step);
+                    store.saveConversation(conversation.state());
+                    await onStep(step, index, output);
+                  },
+                  onModel: () => {
+                    active.modelCalls++;
+                  },
+                },
+              );
+              const current = await controlledBrowser.command(["get", "url"]);
+              browserState.url = current.url || browserState.url;
+              active.startUrl = browserState.url;
+              return result;
+            }
             if ("instruction" in input)
               return explore(
                 input.instruction,
-                input.startUrl,
+                "startUrl" in input && typeof input.startUrl === "string"
+                  ? input.startUrl
+                  : browserState.url || "about:blank",
                 controlledBrowser,
                 config,
                 {
