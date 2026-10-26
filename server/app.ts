@@ -1,0 +1,318 @@
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { readFile, mkdir } from "node:fs/promises";
+import { resolve, join, extname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { Config } from "./config.ts";
+import { Store } from "./store.ts";
+import { Browser } from "./browser.ts";
+import { explore } from "./agent.ts";
+import { runWorkflow } from "./engine.ts";
+import {
+  workflowSchema,
+  validateValues,
+  type Step,
+} from "../shared/workflow.ts";
+import { demoPage } from "./demo.ts";
+
+async function body(req: IncomingMessage) {
+  let content = "";
+  for await (const chunk of req) {
+    content += chunk;
+    if (content.length > 256000) throw new Error("请求超过大小限制");
+  }
+  return JSON.parse(content || "{}");
+}
+const send = (res: ServerResponse, status: number, value: unknown) => {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(JSON.stringify(value));
+};
+const startSchema = z.object({
+  instruction: z.string().min(1).max(10000),
+  startUrl: z.url().refine((s) => /^https?:/.test(s)),
+  credentialId: z.string().optional(),
+});
+const replaySchema = z.object({
+  id: z.string().uuid(),
+  values: z.record(z.string(), z.string()),
+  credentialId: z.string().optional(),
+});
+
+export function createApp(dataDir = resolve("data"), session = "abw-local") {
+  const config = new Config(dataDir),
+    store = new Store(dataDir),
+    browser = new Browser(dataDir, session);
+  let active: any = null;
+  let controller: AbortController | undefined;
+  let frame: Buffer | undefined;
+  let frameVersion = 0;
+  for (const run of store.runs())
+    if (run.status === "running") {
+      run.status = "interrupted";
+      store.saveRun(run);
+    }
+  async function capture() {
+    try {
+      frame = await browser.screenshot();
+      frameVersion++;
+    } catch {
+      /* Screenshot is observational, never changes task success. */
+    }
+  }
+  async function perform(
+    kind: string,
+    task: (
+      signal: AbortSignal,
+      onStep: (s: Step, i: number, output?: unknown) => Promise<void>,
+    ) => Promise<any>,
+  ) {
+    const run = {
+      id: randomUUID(),
+      kind,
+      status: "running",
+      started: new Date().toISOString(),
+      events: [] as any[],
+      modelCalls: 0,
+    };
+    active = run;
+    controller = new AbortController();
+    const localController = controller;
+    store.saveRun(run);
+    void (async () => {
+      let outcome: any;
+      try {
+        const result = await task(
+          localController.signal,
+          async (step, index, output) => {
+            localController.signal.throwIfAborted();
+            run.events.push(
+              await config.redactValue({
+                index,
+                step,
+                output,
+                time: new Date().toISOString(),
+              }),
+            );
+            store.saveRun(run);
+            await capture();
+          },
+        );
+        localController.signal.throwIfAborted();
+        outcome = result;
+      } catch (e: any) {
+        outcome = {
+          status: localController.signal.aborted ? "cancelled" : "failed",
+          error: await config.redact(e.message || "运行失败"),
+        };
+      } finally {
+        await capture();
+        if (localController.signal.aborted) outcome = { status: "cancelled" };
+        Object.assign(run, outcome, { finished: new Date().toISOString() });
+        store.saveRun(run);
+        controller = undefined;
+      }
+    })();
+    return run.id;
+  }
+  const server = createServer(async (req, res) => {
+    try {
+      const host = req.headers.host || "";
+      if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host)) {
+        send(res, 403, { error: "仅允许本机访问" });
+        return;
+      }
+      const origin = req.headers.origin;
+      if (
+        origin &&
+        !new Set([
+          `http://${host}`,
+          "http://127.0.0.1:5173",
+          "http://localhost:5173",
+        ]).has(origin)
+      ) {
+        send(res, 403, { error: "不允许跨站访问" });
+        return;
+      }
+      const path = new URL(req.url || "/", "http://localhost").pathname;
+      if (path === "/demo") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(demoPage);
+        return;
+      }
+      if (path === "/demo/export") {
+        const product =
+          new URL(req.url!, "http://localhost").searchParams.get("product") ||
+          "";
+        res.writeHead(200, {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": 'attachment; filename="products.csv"',
+        });
+        res.end(
+          "\uFEFF产品,编号,库存\n" +
+            product.replaceAll(/[\r\n,"]/g, "") +
+            ",P-2026,128",
+        );
+        return;
+      }
+      if (path === "/api/state" && req.method === "GET") {
+        send(res, 200, { active, history: store.runs(), frameVersion });
+        return;
+      }
+      if (path === "/api/frame" && req.method === "GET") {
+        if (!frame) {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "image/png",
+          "cache-control": "no-store",
+        });
+        res.end(frame);
+        return;
+      }
+      if (path === "/api/settings" && req.method === "GET") {
+        send(res, 200, await config.publicSettings());
+        return;
+      }
+      if (path === "/api/settings" && req.method === "PUT") {
+        await config.update(await body(req));
+        send(res, 200, await config.publicSettings());
+        return;
+      }
+      if (path === "/api/credentials" && req.method === "GET") {
+        send(res, 200, await config.credentials());
+        return;
+      }
+      if (path === "/api/credentials" && req.method === "POST") {
+        if (controller) {
+          send(res, 409, { error: "运行时不能修改凭据" });
+          return;
+        }
+        send(res, 201, { id: await config.saveCredential(await body(req)) });
+        return;
+      }
+      if (path === "/api/workflows" && req.method === "GET") {
+        send(res, 200, store.list());
+        return;
+      }
+      if (path === "/api/workflows" && req.method === "POST") {
+        send(res, 201, store.save(workflowSchema.parse(await body(req))));
+        return;
+      }
+      if (path === "/api/cancel" && req.method === "POST") {
+        controller?.abort();
+        send(res, 200, { ok: true });
+        return;
+      }
+      if (
+        (path === "/api/explore" || path === "/api/replay") &&
+        req.method === "POST"
+      ) {
+        if (controller) {
+          send(res, 409, { error: "已有任务正在运行" });
+          return;
+        }
+        const input =
+          path === "/api/explore"
+            ? startSchema.parse(await body(req))
+            : replaySchema.parse(await body(req));
+        const credential = input.credentialId
+          ? await config.credential(input.credentialId)
+          : undefined;
+        const settings = await config.read();
+        await mkdir(settings.downloadDir, { recursive: true });
+        const replay = "id" in input ? store.get(input.id) : undefined;
+        if (replay && "values" in input) validateValues(replay, input.values);
+        if (credential) {
+          const url =
+            replay?.startUrl || ("startUrl" in input ? input.startUrl : "");
+          if (new URL(url).origin !== credential.origin)
+            throw new Error("起始网址与凭据站点不一致");
+        }
+        // Reserve the single-run lock before any further await.
+        if (controller) {
+          send(res, 409, { error: "已有任务正在运行" });
+          return;
+        }
+        const id = await perform(
+          path === "/api/explore" ? "explore" : "replay",
+          async (signal, onStep) => {
+            const opts = {
+              signal,
+              onStep,
+              credential,
+              downloadDir: settings.downloadDir,
+              tempDir: join(dataDir, "pending"),
+            };
+            if ("instruction" in input)
+              return explore(
+                input.instruction,
+                input.startUrl,
+                browser,
+                config,
+                {
+                  ...opts,
+                  onModel: () => {
+                    active.modelCalls++;
+                  },
+                },
+              );
+            return runWorkflow(replay!, input.values, browser, opts);
+          },
+        );
+        send(res, 202, { id });
+        return;
+      }
+      if (path.startsWith("/api/")) {
+        send(res, 404, { error: "接口不存在" });
+        return;
+      }
+      const dist = resolve("dist");
+      const file =
+        path === "/"
+          ? join(dist, "index.html")
+          : resolve(dist, "." + decodeURIComponent(path));
+      if (
+        file !== dist &&
+        !file.startsWith(dist + (process.platform === "win32" ? "\\" : "/"))
+      ) {
+        send(res, 403, { error: "路径无效" });
+        return;
+      }
+      try {
+        const bytes = await readFile(file);
+        res.writeHead(200, {
+          "content-type":
+            (
+              {
+                ".html": "text/html; charset=utf-8",
+                ".js": "text/javascript",
+                ".css": "text/css",
+                ".svg": "image/svg+xml",
+              } as any
+            )[extname(file)] || "application/octet-stream",
+        });
+        res.end(bytes);
+      } catch {
+        send(res, 404, { error: "请先 npm run build，或使用 npm run dev" });
+      }
+    } catch (e: any) {
+      send(res, 400, {
+        error: await config.redact(
+          e instanceof z.ZodError
+            ? e.issues.map((i) => i.message).join("；")
+            : e.message || "请求失败",
+        ),
+      });
+    }
+  });
+  return { server, store, browser, config };
+}
