@@ -14,6 +14,9 @@ async function api(path: string, method = "GET", body?: unknown) {
 }
 const statusText: Record<string, string> = {
   running: "正在执行",
+  pausing: "等待暂停",
+  paused: "已暂停",
+  repairing: "正在修复定位",
   succeeded: "执行完成",
   no_data: "未查询到数据",
   failed: "执行失败",
@@ -86,6 +89,7 @@ export function App() {
   const [startUrl, setStartUrl] = useState("http://127.0.0.1:3001/demo");
   const [instruction, setInstruction] = useState("");
   const [draft, setDraft] = useState<Workflow | null>(null);
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
   const [selected, setSelected] = useState<any>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -96,7 +100,9 @@ export function App() {
     username: "",
     password: "",
   });
-  const running = state.active?.status === "running";
+  const running = ["running", "pausing", "paused", "repairing"].includes(
+    state.active?.status,
+  );
   async function refresh() {
     const [s, w, c] = await Promise.all([
       api("settings"),
@@ -126,7 +132,42 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    if (state.active?.draft) setDraft(state.active.draft);
+    const events = new EventSource("/api/live");
+    events.addEventListener("frame", (event) => {
+      try {
+        const frame = JSON.parse((event as MessageEvent).data);
+        setLiveFrame(`data:${frame.mime};base64,${frame.data}`);
+      } catch {
+        setLiveFrame(null);
+      }
+    });
+    events.addEventListener("mode", (event) => {
+      if (JSON.parse((event as MessageEvent).data) !== "live")
+        setLiveFrame(null);
+    });
+    events.onerror = () => setLiveFrame(null);
+    return () => events.close();
+  }, []);
+  useEffect(() => {
+    setDraft(state.active?.draft || null);
+  }, [state.active?.id, state.active?.status]);
+  useEffect(() => {
+    const run = state.active;
+    if (run?.repairedVersionId && !running)
+      void api("workflows")
+        .then((list) => {
+          setWorkflows(list);
+          const version = list.find((w: any) => w.id === run.repairedVersionId);
+          if (version) {
+            setSelected((previous: any) =>
+              previous?.id === run.workflowId ? version : previous,
+            );
+            setNotice(
+              `修复成功，已保存版本 ${version.version}；旧版本仍可选择。`,
+            );
+          }
+        })
+        .catch((e) => setError(e.message));
   }, [state.active?.id, state.active?.status]);
   async function act(fn: () => Promise<void>) {
     setBusy(true);
@@ -181,7 +222,11 @@ export function App() {
           <button
             key={id}
             className={"nav-item " + (view === id ? "active" : "")}
-            onClick={() => setView(id)}
+            onClick={() => {
+              setView(id);
+              if (id === "flows")
+                void refresh().catch((e) => setError(e.message));
+            }}
           >
             <Icon name={icon} />
             {label}
@@ -275,6 +320,29 @@ export function App() {
                 {selected ? (
                   <div className="form-content">
                     <label>
+                      流程版本
+                      <select
+                        value={selected.id}
+                        disabled={running}
+                        onChange={(e) =>
+                          choose(workflows.find((w) => w.id === e.target.value))
+                        }
+                      >
+                        {workflows
+                          .filter(
+                            (w) =>
+                              (w.rootId || w.id) ===
+                              (selected.rootId || selected.id),
+                          )
+                          .map((w) => (
+                            <option key={w.id} value={w.id}>
+                              版本 {w.version || 1}
+                              {w.parentId ? " · 修复后保存" : " · 原始流程"}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
                       起始网址
                       <input value={selected.startUrl} readOnly />
                     </label>
@@ -356,20 +424,50 @@ export function App() {
                     }
                   >
                     <Icon name="play" />
-                    {running ? "正在运行…" : selected ? "运行流程" : "开始操作"}
+                    {running
+                      ? statusText[active.status] || "正在运行…"
+                      : selected
+                        ? "运行流程"
+                        : "开始操作"}
                   </button>
                   {running && (
-                    <button
-                      className="danger-button"
-                      onClick={() =>
-                        act(async () => {
-                          await api("cancel", "POST");
-                          setNotice("已请求停止，当前浏览器命令结束后生效。");
-                        })
-                      }
-                    >
-                      停止后续操作
-                    </button>
+                    <div className="run-controls">
+                      <button
+                        className="secondary"
+                        disabled={busy || active.status === "pausing"}
+                        onClick={() =>
+                          act(async () => {
+                            await api(
+                              active.status === "paused" ? "resume" : "pause",
+                              "POST",
+                            );
+                            setState(await api("state"));
+                          })
+                        }
+                      >
+                        {active.status === "paused"
+                          ? "继续执行"
+                          : active.status === "pausing"
+                            ? "正在暂停…"
+                            : "暂停 / 人工接管"}
+                      </button>
+                      <button
+                        className="danger-button"
+                        onClick={() =>
+                          act(async () => {
+                            await api("cancel", "POST");
+                            setNotice("已请求停止，当前浏览器命令结束后生效。");
+                          })
+                        }
+                      >
+                        停止后续操作
+                      </button>
+                    </div>
+                  )}
+                  {active?.status === "paused" && (
+                    <p className="field-note takeover-note">
+                      可以在独立浏览器中完成验证码或调整页面，之后点击“继续执行”。
+                    </p>
                   )}
                 </div>
                 <div className="trace-heading">
@@ -427,14 +525,21 @@ export function App() {
                   </div>
                   <div className="address-bar">
                     <span>▣</span>
-                    {selected?.startUrl || startUrl}
+                    {(running ? active?.startUrl : undefined) ||
+                      selected?.startUrl ||
+                      active?.startUrl ||
+                      startUrl}
                   </div>
-                  <span className="capture-tag">步骤快照</span>
+                  <span
+                    className={"capture-tag " + (liveFrame ? "live-tag" : "")}
+                  >
+                    {liveFrame ? "实时画面" : "步骤快照"}
+                  </span>
                 </div>
                 <div className="viewport">
-                  {state.frameVersion ? (
+                  {liveFrame || state.frameVersion ? (
                     <img
-                      src={"/api/frame?v=" + state.frameVersion}
+                      src={liveFrame || "/api/frame?v=" + state.frameVersion}
                       alt="自动化浏览器当前画面"
                     />
                   ) : (
@@ -486,7 +591,7 @@ export function App() {
                   </span>
                   <span>
                     {active
-                      ? `本次模型调用 ${active.modelCalls} 次`
+                      ? `模型 ${active.modelCalls} 次${active.repairs ? " · 修复 " + active.repairs + " 次" : ""}`
                       : "独立浏览器 · agent-browser"}
                   </span>
                 </footer>
@@ -494,9 +599,22 @@ export function App() {
                   <div className="run-error">
                     {active.error}
                     <small>
-                      当前最小版本会停止并保留记录；自动修复将在后续版本加入。
+                      已停止并保留记录。定位失效会自动尝试修复；操作结果不明时不会重复提交。
                     </small>
                   </div>
+                )}
+                {!!active?.repairLog?.length && (
+                  <details className="repair-details">
+                    <summary>查看 {active.repairLog.length} 次自动修复</summary>
+                    {active.repairLog.map((entry: any, i: number) => (
+                      <p key={i}>
+                        第 {entry.index + 1} 步：
+                        {entry.before.selector ||
+                          entry.before.dataSelector} →{" "}
+                        {entry.after.selector || entry.after.dataSelector}
+                      </p>
+                    ))}
+                  </details>
                 )}
               </section>
             </div>
@@ -582,7 +700,12 @@ export function App() {
                       <Icon name="grid" />
                     </span>
                     <span>
-                      <strong>{w.name}</strong>
+                      <strong>
+                        {w.name}{" "}
+                        <span className="version-badge">
+                          版本 {w.version || 1}
+                        </span>
+                      </strong>
                       <small>{w.startUrl}</small>
                     </span>
                     <span>{w.steps.length} 个步骤</span>

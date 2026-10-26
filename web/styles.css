@@ -865,6 +865,57 @@ textarea::placeholder {
   width: 100%;
   min-width: 0;
 }
+.run-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+.run-controls .secondary {
+  flex: 1;
+  font-size: 10px;
+}
+.run-controls .danger-button {
+  width: auto;
+  font-size: 10px;
+}
+.takeover-note {
+  margin: 12px 0 0;
+  line-height: 1.8;
+  color: #2055cd;
+}
+.live-tag {
+  color: #147d73;
+}
+.repair-details {
+  border-top: 1px solid #dde5f0;
+  padding: 15px 18px;
+  font-size: 11px;
+  color: #526580;
+}
+.repair-details summary {
+  cursor: pointer;
+}
+.repair-details p {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+.version-badge {
+  font-size: 10px;
+  font-weight: 400;
+  border: 1px solid #dde5f0;
+  border-radius: 4px;
+  margin-left: 8px;
+  padding: 2px 5px;
+  color: #718098;
+}
+.run-status.paused i,
+.run-status.pausing i {
+  background: #a87616;
+}
+.run-status.repairing i {
+  background: #2055cd;
+}
 .viewport-empty {
   width: 100%;
   min-width: 0;

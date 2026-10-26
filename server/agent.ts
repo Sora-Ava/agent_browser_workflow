@@ -77,8 +77,10 @@ export async function explore(
   messages[0].content +=
     " 登录请优先使用 login 动作，声明登录成功标志，便于后续已登录时跳过。";
   await browser.command(["open", startUrl]);
+  await opts.onReady?.();
   let noData = false;
   for (let turn = 0; turn < 35; turn++) {
+    await opts.checkpoint?.();
     opts.signal.throwIfAborted();
     opts.onModel();
     const endpoint = settings.baseUrl.replace(/\/$/, "");

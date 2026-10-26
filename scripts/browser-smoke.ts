@@ -24,7 +24,8 @@ async function api(path: string, method = "GET", body?: unknown) {
 async function waitRun() {
   for (let i = 0; i < 150; i++) {
     const { active } = await api("state");
-    if (active.status !== "running") return active;
+    if (!["running", "repairing", "paused", "pausing"].includes(active.status))
+      return active;
     await new Promise((r) => setTimeout(r, 300));
   }
   throw new Error("run timeout");

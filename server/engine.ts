@@ -7,7 +7,9 @@ import {
   validateValues,
   type Workflow,
   type Step,
+  workflowSchema,
 } from "../shared/workflow.ts";
+import { locatorKeys, applyLocatorPatch } from "./repair.ts";
 
 export interface BrowserPort {
   command(args: string[]): Promise<any>;
@@ -18,6 +20,15 @@ export interface ExecutionOptions {
   downloadDir?: string;
   tempDir?: string;
   credential?: { origin: string; username: string; password: string };
+  checkpoint?: () => Promise<void>;
+  onReady?: () => Promise<void>;
+  repairStep?: (step: Step, error: string, index: number) => Promise<Step>;
+  onRepair?: (
+    index: number,
+    before: Step,
+    after: Step,
+    attempt: number,
+  ) => Promise<void>;
 }
 export async function executeStep(
   step: Step,
@@ -129,14 +140,88 @@ export async function runWorkflow(
   validateValues(workflow, values);
   opts.signal.throwIfAborted();
   await browser.command(["open", workflow.startUrl]);
+  await opts.onReady?.();
+  const current = structuredClone(workflow);
+  let repairs = 0;
   const outputs: unknown[] = [];
-  for (const [index, step] of workflow.steps.entries()) {
+  for (const [index] of current.steps.entries()) {
+    let step = current.steps[index];
     opts.signal.throwIfAborted();
-    const result = await executeStep(step, values, browser, opts);
+    let result: any;
+    while (true) {
+      await opts.checkpoint?.();
+      opts.signal.throwIfAborted();
+      let dispatched = false;
+      try {
+        // Preflight is only added when automatic repair is enabled. Existing
+        // workflows use the same schema and normal replay still needs no model.
+        if (opts.repairStep) {
+          let selectors =
+            "selector" in step && step.type !== "wait" ? [step.selector] : [];
+          if (
+            step.type === "login" &&
+            !(await browser.command(["is", "visible", step.successSelector]))
+              .visible
+          )
+            selectors = [
+              step.usernameSelector,
+              step.passwordSelector,
+              step.submitSelector,
+            ];
+          for (const selector of selectors) {
+            const found = await browser.command(["get", "count", selector]);
+            if (found.count !== 1)
+              throw new Error(`定位匹配 ${found.count} 个元素：${selector}`);
+          }
+        }
+        dispatched = true;
+        result = await executeStep(step, values, browser, opts);
+        break;
+      } catch (error: any) {
+        opts.signal.throwIfAborted();
+        const readOnly =
+          step.type === "wait" ||
+          step.type === "extract" ||
+          step.type === "checkResults";
+        if (!opts.repairStep || (dispatched && !readOnly)) throw error;
+        if (repairs >= 2)
+          throw new Error("自动修复已达到两次上限，请检查页面和流程");
+        repairs++;
+        const proposal = await opts.repairStep(step, error.message, index);
+        // Enforce the same narrow patch contract even for alternate providers.
+        for (const [key, value] of Object.entries(proposal))
+          if (
+            !locatorKeys.includes(key as any) &&
+            JSON.stringify(value) !== JSON.stringify((step as any)[key])
+          )
+            throw new Error("修复不得改变动作或参数");
+        const patch = Object.fromEntries(
+          Object.entries(proposal).filter(([key]) =>
+            locatorKeys.includes(key as any),
+          ),
+        );
+        const repaired = applyLocatorPatch(step, patch);
+        const before = step;
+        step = repaired;
+        current.steps[index] = repaired;
+        await opts.onRepair?.(index, before, repaired, repairs);
+      }
+    }
     outputs.push(result);
     await opts.onStep(step, index, result);
-    if (result?.noData) return { status: "no_data" as const, outputs };
+    if (result?.noData)
+      return {
+        status: "no_data" as const,
+        outputs,
+        repairs,
+        repairedWorkflow: repairs ? workflowSchema.parse(current) : undefined,
+      };
   }
   opts.signal.throwIfAborted();
-  return { status: "succeeded" as const, outputs };
+  return {
+    status: "succeeded" as const,
+    outputs,
+    repairs,
+    repairedWorkflow: repairs ? workflowSchema.parse(current) : undefined,
+  };
 }

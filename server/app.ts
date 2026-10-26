@@ -18,6 +18,9 @@ import {
   type Step,
 } from "../shared/workflow.ts";
 import { demoPage } from "./demo.ts";
+import { RunControl } from "./control.ts";
+import { LiveFrames } from "./live.ts";
+import { repairLocator } from "./repair.ts";
 
 async function body(req: IncomingMessage) {
   let content = "";
@@ -50,11 +53,12 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
     store = new Store(dataDir),
     browser = new Browser(dataDir, session);
   let active: any = null;
-  let controller: AbortController | undefined;
+  let controller: RunControl | undefined;
+  const live = new LiveFrames(browser);
   let frame: Buffer | undefined;
   let frameVersion = 0;
   for (const run of store.runs())
-    if (run.status === "running") {
+    if (["running", "paused", "pausing", "repairing"].includes(run.status)) {
       run.status = "interrupted";
       store.saveRun(run);
     }
@@ -82,7 +86,15 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
       modelCalls: 0,
     };
     active = run;
-    controller = new AbortController();
+    controller = new RunControl(
+      (state) => {
+        run.status = state;
+        store.saveRun(run);
+      },
+      async () => {
+        await browser.observe();
+      },
+    );
     const localController = controller;
     store.saveRun(run);
     void (async () => {
@@ -114,7 +126,30 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
       } finally {
         await capture();
         if (localController.signal.aborted) outcome = { status: "cancelled" };
-        Object.assign(run, outcome, { finished: new Date().toISOString() });
+        const { repairedWorkflow, ...visibleOutcome } = outcome;
+        if (
+          repairedWorkflow &&
+          ["succeeded", "no_data"].includes(visibleOutcome.status)
+        ) {
+          try {
+            const version = store.saveVersion(
+              visibleOutcome.workflowId,
+              repairedWorkflow,
+            );
+            Object.assign(visibleOutcome, {
+              repairedVersionId: version.id,
+              repairedVersion: version.version,
+            });
+          } catch {
+            Object.assign(visibleOutcome, {
+              status: "failed",
+              error: "本次操作已执行，但修复版本保存失败，请检查本机存储。",
+            });
+          }
+        }
+        Object.assign(run, visibleOutcome, {
+          finished: new Date().toISOString(),
+        });
         store.saveRun(run);
         controller = undefined;
       }
@@ -162,7 +197,16 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         return;
       }
       if (path === "/api/state" && req.method === "GET") {
-        send(res, 200, { active, history: store.runs(), frameVersion });
+        send(res, 200, {
+          active,
+          history: store.runs(),
+          frameVersion,
+          captureMode: live.mode,
+        });
+        return;
+      }
+      if (path === "/api/live" && req.method === "GET") {
+        live.subscribe(res);
         return;
       }
       if (path === "/api/frame" && req.method === "GET") {
@@ -208,7 +252,20 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         return;
       }
       if (path === "/api/cancel" && req.method === "POST") {
-        controller?.abort();
+        controller?.cancel();
+        send(res, 200, { ok: true });
+        return;
+      }
+      if (
+        (path === "/api/pause" || path === "/api/resume") &&
+        req.method === "POST"
+      ) {
+        if (!controller) {
+          send(res, 409, { error: "当前没有运行中的任务" });
+          return;
+        }
+        if (path === "/api/pause") controller.pause();
+        else controller.resume();
         send(res, 200, { ok: true });
         return;
       }
@@ -245,18 +302,35 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         const id = await perform(
           path === "/api/explore" ? "explore" : "replay",
           async (signal, onStep) => {
+            active.startUrl =
+              replay?.startUrl ||
+              ("startUrl" in input ? input.startUrl : undefined);
+            active.workflowName = replay?.name;
+            const control = controller!;
+            const controlledBrowser = new Proxy(browser, {
+              get(target, property, receiver) {
+                if (property === "command")
+                  return async (args: string[]) => {
+                    await control.checkpoint();
+                    return target.command(args);
+                  };
+                return Reflect.get(target, property, receiver);
+              },
+            });
             const opts = {
               signal,
               onStep,
               credential,
               downloadDir: settings.downloadDir,
               tempDir: join(dataDir, "pending"),
+              checkpoint: () => control.checkpoint(),
+              onReady: () => live.start(),
             };
             if ("instruction" in input)
               return explore(
                 input.instruction,
                 input.startUrl,
-                browser,
+                controlledBrowser,
                 config,
                 {
                   ...opts,
@@ -265,7 +339,43 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
                   },
                 },
               );
-            return runWorkflow(replay!, input.values, browser, opts);
+            const result = await runWorkflow(
+              replay!,
+              input.values,
+              controlledBrowser,
+              {
+                ...opts,
+                repairStep: async (step, error, index) => {
+                  await control.checkpoint();
+                  active.status = "repairing";
+                  active.repairingStep = index;
+                  store.saveRun(active);
+                  try {
+                    return await repairLocator(
+                      step,
+                      error,
+                      controlledBrowser,
+                      config,
+                      signal,
+                      () => {
+                        active.modelCalls++;
+                      },
+                    );
+                  } finally {
+                    if (!["paused", "pausing"].includes(control.status))
+                      active.status = "running";
+                  }
+                },
+                onRepair: async (index, before, after, attempt) => {
+                  active.repairLog ??= [];
+                  active.repairLog.push(
+                    await config.redactValue({ index, before, after, attempt }),
+                  );
+                  store.saveRun(active);
+                },
+              },
+            );
+            return { ...result, workflowId: input.id };
           },
         );
         send(res, 202, { id });
@@ -314,5 +424,6 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
       });
     }
   });
-  return { server, store, browser, config };
+  server.once("close", () => live.close());
+  return { server, store, browser, config, live };
 }
