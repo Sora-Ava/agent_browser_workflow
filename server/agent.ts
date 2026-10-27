@@ -102,6 +102,7 @@ export async function explore(
   } else await browser.command(["open", startUrl]);
   await opts.onReady?.();
   let noData = false;
+  let locatorFailures = 0;
   for (let turn = 0; turn < 35; turn++) {
     await opts.checkpoint?.();
     opts.signal.throwIfAborted();
@@ -209,6 +210,35 @@ export async function explore(
             "parameter" in step.value
           )
             throw new Error("首次执行请填写具体值，finish 时再绑定参数");
+          // Only a failed preflight is safe to feed back for another attempt.
+          // Once dispatched, click errors still terminate to avoid duplicate effects.
+          if (step.type === "click") {
+            const found = await browser.command([
+              "get",
+              "count",
+              step.selector,
+            ]);
+            if (found.count !== 1) {
+              if (++locatorFailures > 2)
+                throw new Error(
+                  "点击定位连续失败，已停止；请明确目标或检查页面",
+                );
+              output = {
+                error: `未执行点击：选择器匹配 ${found.count} 个元素。请根据最新观察重新定位，不要猜测 name/id；有多个目标时询问用户。`,
+                observation: await browser.observe(),
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: tool.id,
+                content: JSON.stringify(await config.redactValue(output)).slice(
+                  0,
+                  24000,
+                ),
+              });
+              // Ignore any other actions in this model response after failed validation.
+              break;
+            }
+          }
           output = await executeStep(step, {}, browser, opts);
           steps.push(step);
           await opts.onStep(step, steps.length - 1, output);
