@@ -1,7 +1,54 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { workflowSchema, bindValue } from "../shared/workflow.ts";
-import { runWorkflow } from "../server/engine.ts";
+import { runWorkflow, executeStep } from "../server/engine.ts";
+
+test("stringified credential references bind values and retain credential origin checks", async () => {
+  for (const [literal, key] of [
+    [`{credential:"username"}`, "username"],
+    [`{"credential":"password"}`, "password"],
+  ] as const) {
+    const commands: string[][] = [];
+    const credential = {
+      origin: "https://example.local",
+      username: "fixture-user",
+      password: "fixture-password",
+    };
+    const browser = {
+      command: async (args: string[]) => {
+        commands.push(args);
+        return { url: "https://example.local/login" };
+      },
+    };
+    const step = { type: "fill" as const, selector: "#input", value: literal };
+    await executeStep(step, {}, browser, {
+      credential,
+      signal: new AbortController().signal,
+      onStep: async () => {},
+    });
+    assert.deepEqual(commands.at(-1), ["fill", "#input", credential[key]]);
+    const parsed = workflowSchema.parse({
+      name: "登录",
+      startUrl: credential.origin,
+      parameters: [],
+      steps: [step],
+    });
+    assert.deepEqual((parsed.steps[0] as any).value, { credential: key });
+    commands.length = 0;
+    await assert.rejects(
+      executeStep(step, {}, browser, {
+        credential: { ...credential, origin: "https://other.local" },
+        signal: new AbortController().signal,
+        onStep: async () => {},
+      }),
+      /不一致/,
+    );
+    assert.equal(
+      commands.some((a) => a[0] === "fill"),
+      false,
+    );
+  }
+});
 
 const workflow = () => ({
   name: "产品查询",

@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
   bindValue,
+  normalizeCredentialReference,
   validateValues,
   type Workflow,
   type Step,
@@ -71,7 +72,10 @@ export async function executeStep(
       return browser.command(["click", step.selector]);
     case "fill":
     case "select": {
-      if (typeof step.value === "object" && "credential" in step.value) {
+      const value = normalizeCredentialReference(
+        step.value,
+      ) as typeof step.value;
+      if (typeof value === "object" && "credential" in value) {
         const current = await browser.command(["get", "url"]);
         if (
           !opts.credential ||
@@ -82,7 +86,7 @@ export async function executeStep(
       return browser.command([
         step.type,
         step.selector,
-        bindValue(step.value, values, opts.credential),
+        bindValue(value, values, opts.credential),
       ]);
     }
     case "press":
