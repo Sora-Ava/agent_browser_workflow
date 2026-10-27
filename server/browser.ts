@@ -3,6 +3,8 @@ import { resolve, join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { windowsDownload } from "./windows-download.ts";
+import { randomUUID } from "node:crypto";
+import { parseTextLocator, resolveTextInPage } from "./text-locator.ts";
 
 const cli = resolve("node_modules/agent-browser/bin/agent-browser.js");
 export class Browser {
@@ -14,6 +16,36 @@ export class Browser {
     this.session = session;
   }
   async command(args: string[]): Promise<any> {
+    // Persist semantic intent; resolve afresh on every execution, then use native
+    // agent-browser actions for scrolling, hit testing and real input events.
+    const index = ["click", "fill", "select", "wait", "download"].includes(
+      args[0],
+    )
+      ? 1
+      : ["get", "is"].includes(args[0])
+        ? 2
+        : -1;
+    if (index >= 0 && args[index]?.startsWith("text:")) {
+      const locator = parseTextLocator(args[index])!;
+      // tsx may insert its function-name helper in serialized function bodies.
+      const resolved = await this.command([
+        "eval",
+        `(() => { const __name = (fn, name) => fn; return (${resolveTextInPage.toString()})(${JSON.stringify(locator)},${JSON.stringify(randomUUID())}); })()`,
+      ]);
+      const result =
+        typeof resolved.result === "string"
+          ? JSON.parse(resolved.result)
+          : resolved.result;
+      if (args[0] === "get" && args[1] === "count")
+        return { count: result.count };
+      if (args[0] === "is" && result.count === 0) return { visible: false };
+      if (result.count !== 1)
+        throw new Error(
+          `文字「${locator.text}」匹配 ${result.count} 个目标，请补充角色或所在区域：${JSON.stringify(result.candidates)}`,
+        );
+      args = [...args];
+      args[index] = result.selector;
+    }
     if (process.platform === "win32" && args[0] === "download")
       return windowsDownload(this, args[1], args[2]);
     await mkdir(this.dataDir, { recursive: true });

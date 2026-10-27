@@ -108,3 +108,10 @@ npm audit
 
 - [完整设计](docs/superpowers/specs/2026-10-26-agent-browser-workflow-design.md)
 - [本轮实施计划](docs/superpowers/plans/2026-10-26-minimum-workflow.md)
+# 中文文字定位
+
+探索时优先根据可见中文文字操作，支持 span/div 内文字、可点击父节点和标签关联控件。
+流程定位可保存为 `text:{"text":"菜单","role":"tab"}`，可选 `scope`（所在区域文字）
+和 `match`（`auto`、`exact`、`contains`）。默认先精确匹配，找不到再包含匹配；
+多个目标会要求补充上下文，不会默认点击第一个。原有 CSS 流程仍兼容。
+重放会重新解析文字目标，无需调用模型。独立真实浏览器验证：`npx tsx scripts/text-smoke.ts`。
