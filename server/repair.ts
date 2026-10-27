@@ -14,7 +14,7 @@ export const locatorKeys = [
 ] as const;
 const patchSchema = z.strictObject(
   Object.fromEntries(
-    locatorKeys.map((k) => [k, z.string().min(1).max(1000).optional()]),
+    locatorKeys.map((k) => [k, z.string().min(1).max(4000).optional()]),
   ),
 );
 export function applyLocatorPatch(step: Step, input: unknown): Step {
