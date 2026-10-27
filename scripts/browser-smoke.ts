@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { createApp } from "../server/app.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
+import { scriptedIndexed } from "./scripted-indexed.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "abw-real-"));
 const app = createApp(dir, `abw-smoke-${Date.now()}`);
@@ -107,7 +108,14 @@ try {
     ["observe", {}],
     ...demoWorkflow.steps.map((s) => [
       "act",
-      { step: s.type === "fill" ? { ...s, value: "产品 A" } : s },
+      {
+        step:
+          s.type === "fill"
+            ? { ...s, value: "产品 A" }
+            : s.type === "login"
+              ? { type: "wait", selector: s.successSelector }
+              : s,
+      },
     ]),
     [
       "finish",
@@ -129,7 +137,12 @@ try {
     for await (const chunk of req) raw += chunk;
     const request = JSON.parse(raw);
     assert.equal(request.tools[1].function.parameters.type, "object");
-    const [name, args] = transcript.shift();
+    const [scriptName, scriptArgs] = transcript.shift();
+    const { name, args } = await scriptedIndexed(
+      app.browser,
+      scriptName,
+      scriptArgs,
+    );
     res.setHeader("content-type", "application/json");
     res.end(
       JSON.stringify({

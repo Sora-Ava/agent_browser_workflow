@@ -3,9 +3,10 @@ import { z } from "zod";
 const selector = z
   .string()
   .min(1)
-  .max(1000)
+  .max(4000)
   .refine(
-    (s) => !/@e\d+/.test(s) && !s.startsWith("-"),
+    (s) =>
+      !/@e\d+/.test(s) && !s.startsWith("-") && !s.includes("data-abw-index"),
     "必须使用稳定 CSS 定位，不能使用 @e 引用",
   );
 const value = z.union([

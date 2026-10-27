@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../server/app.ts";
 import { Browser } from "../server/browser.ts";
+import { scriptedIndexed } from "./scripted-indexed.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "abw-chat-real-"));
 const app = createApp(dir, `abw-chat-${Date.now()}`);
@@ -48,7 +49,12 @@ const transcript: any[] = [
 const model = createServer(async (req, res) => {
   for await (const _chunk of req) {
   }
-  const [name, args] = transcript.shift();
+  const [scriptName, scriptArgs] = transcript.shift();
+  const { name, args } = await scriptedIndexed(
+    app.browser,
+    scriptName,
+    scriptArgs,
+  );
   res.setHeader("content-type", "application/json");
   res.end(
     JSON.stringify({

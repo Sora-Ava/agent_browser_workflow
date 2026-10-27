@@ -110,6 +110,12 @@ npm audit
 - [本轮实施计划](docs/superpowers/plans/2026-10-26-minimum-workflow.md)
 # 中文文字定位
 
+探索操作采用“当前观察批次 + 元素编号”：模型根据中文名称、角色及区域选择真实元素，
+程序验证节点仍有效后交给 agent-browser 执行。每次操作后自动刷新观察，旧编号失效。
+成功操作会保存为 `element:` 持久描述（文字、角色、关联标签、区域和必要属性），
+流程中不会保存临时编号；重放重新匹配并拒绝不明确的目标，无需调用模型。
+验证命令：`npx tsx scripts/indexed-smoke.ts`。
+
 探索时优先根据可见中文文字操作，支持 span/div 内文字、可点击父节点和标签关联控件。
 流程定位可保存为 `text:{"text":"菜单","role":"tab"}`，可选 `scope`（所在区域文字）
 和 `match`（`auto`、`exact`、`contains`）。默认先精确匹配，找不到再包含匹配；
