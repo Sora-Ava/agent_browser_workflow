@@ -8,6 +8,7 @@ const settingsSchema = z.object({
   model: z.string().min(1).max(200),
   apiKey: z.string().max(4000),
   downloadDir: z.string().refine(isAbsolute, "下载目录必须为绝对路径"),
+  maxModelCalls: z.number().int().min(2).max(30).default(8),
 });
 const credentialSchema = z.object({
   origin: z.url().refine((s) => /^https?:/.test(s)),
@@ -28,12 +29,15 @@ async function load(file: string, fallback: any) {
 export class Config {
   constructor(readonly dir: string) {}
   async read(): Promise<Settings> {
-    return load(join(this.dir, "settings.json"), {
-      baseUrl: process.env.LLM_BASE_URL || "https://api.openai.com/v1",
-      model: process.env.LLM_MODEL || "",
-      apiKey: process.env.LLM_API_KEY || "",
-      downloadDir: resolve("downloads"),
-    });
+    return {
+      maxModelCalls: 8,
+      ...(await load(join(this.dir, "settings.json"), {
+        baseUrl: process.env.LLM_BASE_URL || "https://api.openai.com/v1",
+        model: process.env.LLM_MODEL || "",
+        apiKey: process.env.LLM_API_KEY || "",
+        downloadDir: resolve("downloads"),
+      })),
+    };
   }
   async publicSettings() {
     const { apiKey, ...rest } = await this.read();

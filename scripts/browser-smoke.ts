@@ -170,6 +170,7 @@ try {
       baseUrl: `http://127.0.0.1:${(provider.address() as any).port}/v1`,
       apiKey: "",
       model: "scripted-contract-provider",
+      maxModelCalls: 12,
       downloadDir: join(dir, "downloads"),
     });
     await api("explore", "POST", {
