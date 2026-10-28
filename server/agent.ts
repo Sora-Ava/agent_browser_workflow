@@ -3,6 +3,7 @@ import {
   stepSchema,
   workflowSchema,
   parameterSchema,
+  inputValueSchema,
   type Step,
   type Workflow,
 } from "../shared/workflow.ts";
@@ -25,12 +26,7 @@ const indexedActionSchema = z.object({
   observationId: z.string().min(1).max(100),
   index: z.number().int().positive(),
   type: z.enum(["click", "fill", "select", "download"]),
-  value: z
-    .union([
-      z.string().max(10000),
-      z.object({ credential: z.enum(["username", "password"]) }),
-    ])
-    .optional(),
+  value: inputValueSchema.optional(),
   filename: z.string().optional(),
 });
 export const agentTools = [
@@ -238,6 +234,12 @@ export async function explore(
           if (steps.length - initialCount >= 30 || steps.length >= 100)
             throw new Error("超过动作预算");
           const action = indexedActionSchema.parse(args);
+          if (
+            action.value &&
+            typeof action.value === "object" &&
+            "parameter" in action.value
+          )
+            throw new Error("首次执行请填写具体值，finish 时再绑定参数");
           let prepared: { selector: string; locator: string; tag?: string };
           try {
             if (

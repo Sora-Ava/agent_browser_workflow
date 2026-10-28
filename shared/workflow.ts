@@ -9,11 +9,25 @@ const selector = z
       !/@e\d+/.test(s) && !s.startsWith("-") && !s.includes("data-abw-index"),
     "必须使用稳定 CSS 定位，不能使用 @e 引用",
   );
-const value = z.union([
-  z.string().max(10000),
-  z.object({ parameter: z.string() }),
-  z.object({ credential: z.enum(["username", "password"]) }),
-]);
+export function normalizeCredentialReference(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  // Accept only the complete reference syntax, never eval model-authored text.
+  const match = v
+    .trim()
+    .match(
+      /^\{\s*["']?credential["']?\s*:\s*["'](username|password)["']\s*\}$/,
+    );
+  return match ? { credential: match[1] } : v;
+}
+export const inputValueSchema = z.preprocess(
+  normalizeCredentialReference,
+  z.union([
+    z.string().max(10000),
+    z.object({ parameter: z.string() }),
+    z.object({ credential: z.enum(["username", "password"]) }),
+  ]),
+);
+const value = inputValueSchema;
 export const stepSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("login"),
