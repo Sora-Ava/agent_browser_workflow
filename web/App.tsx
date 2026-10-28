@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import type { Workflow, Step } from "../shared/workflow.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
+import { inputRows, toggleInputParameter } from "../shared/input-parameters.ts";
 
 async function api(path: string, method = "GET", body?: unknown) {
   const response = await fetch("/api/" + path, {
@@ -824,7 +825,7 @@ export function App() {
                 <div>
                   <h2>保存本次对话录制的完整流程（{draft.steps.length} 步）</h2>
                   <p>
-                    自动识别的参数可修改；未参数化的输入会保持首次执行时的值。
+                    勾选下次需要修改的输入；未勾选的值保持固定。账号密码引用不会列为参数。
                   </p>
                 </div>
                 <label>
@@ -836,40 +837,79 @@ export function App() {
                     }
                   />
                 </label>
-                {draft.parameters.map((p, i) => (
-                  <div className="parameter-edit" key={i}>
-                    <label>
-                      参数显示名称
+                {inputRows(draft).map((row) => (
+                  <div className="input-review-row" key={row.indexes.join(",")}>
+                    <label className="parameter-toggle">
                       <input
-                        value={p.label}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            parameters: draft.parameters.map((x, j) =>
-                              j === i ? { ...x, label: e.target.value } : x,
-                            ),
-                          })
-                        }
+                        type="checkbox"
+                        checked={Boolean(row.parameter)}
+                        onChange={(e) => {
+                          try {
+                            setDraft(
+                              toggleInputParameter(
+                                draft,
+                                row,
+                                e.target.checked,
+                              ),
+                            );
+                          } catch (err: any) {
+                            setError(err.message);
+                          }
+                        }}
                       />
+                      下次可修改
+                      <small>
+                        步骤 {row.indexes.map((i) => i + 1).join("、")}
+                      </small>
                     </label>
-                    <label>
-                      默认值
-                      <input
-                        value={p.defaultValue}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            parameters: draft.parameters.map((x, j) =>
-                              j === i
-                                ? { ...x, defaultValue: e.target.value }
-                                : x,
-                            ),
-                          })
-                        }
-                      />
-                    </label>
+                    <div className="parameter-edit">
+                      <label>
+                        参数显示名称
+                        <input
+                          value={row.label}
+                          disabled={!row.parameter}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              parameters: draft.parameters.map((x) =>
+                                x.name === row.parameter
+                                  ? { ...x, label: e.target.value }
+                                  : x,
+                              ),
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        {row.parameter ? "默认值" : "固定值"}
+                        <input
+                          value={row.value}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              parameters: draft.parameters.map((x) =>
+                                x.name === row.parameter
+                                  ? { ...x, defaultValue: e.target.value }
+                                  : x,
+                              ),
+                              steps: row.parameter
+                                ? draft.steps
+                                : draft.steps.map((s, i) =>
+                                    row.indexes.includes(i) &&
+                                    (s.type === "fill" || s.type === "select")
+                                      ? { ...s, value: e.target.value }
+                                      : s,
+                                  ),
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
                   </div>
                 ))}
+                {!inputRows(draft).length && (
+                  <p>本次没有可设为参数的业务输入。</p>
+                )}
                 <button
                   className="primary"
                   disabled={busy}
@@ -1000,6 +1040,24 @@ export function App() {
                     setSettings({ ...settings, downloadDir: e.target.value })
                   }
                 />
+              </label>
+              <label>
+                每条指令最多调用模型次数
+                <input
+                  type="number"
+                  min="2"
+                  max="30"
+                  value={settings.maxModelCalls ?? 8}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      maxModelCalls: Number(e.target.value),
+                    })
+                  }
+                />
+                <small>
+                  默认8次；复杂任务可拆分为多条指令。定位失败最多自动恢复1次。
+                </small>
               </label>
               <button
                 className="primary"

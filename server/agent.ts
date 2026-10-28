@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { modelMessages } from "./model-context.ts";
+import { inferInputParameters } from "../shared/input-parameters.ts";
 import {
   stepSchema,
   workflowSchema,
@@ -20,7 +22,8 @@ const finishSchema = z.object({
         stepIndexes: z.array(z.number().int().nonnegative()),
       }),
     )
-    .max(30),
+    .max(30)
+    .default([]),
 });
 const indexedActionSchema = z.object({
   observationId: z.string().min(1).max(100),
@@ -102,22 +105,35 @@ export async function explore(
     },
   ];
   messages[0].content +=
-    " 当前观察若提供 elements 和 observationId，点击/填写/选择/下载必须使用 act_on，通过中文文字、角色和区域选择对应 index；只用当前观察提供的编号，不准猜编号或改用CSS。每次动作后程序会返回最新观察，旧编号失效。输入凭据用 value:{credential:...}。登录分为填写账号、密码、点击登录，录制后可重放。act 仅用于导航、等待、提取、按键和结果检查。未找到目标请 observe 或向用户说明。";
+    " 当前观察若提供 elements 和 observationId，点击/填写/选择/下载必须使用 act_on，通过中文文字、角色和区域选择对应 index；只用当前观察提供的编号，不准猜编号或改用CSS。每次动作后程序会返回最新观察，旧编号失效，不需要重复observe。surface为dialog时优先处理当前弹窗，不能操作背景页面。输入凭据用 value:{credential:...}。登录分为填写账号、密码、点击登录，录制后可重放。act 仅用于导航、等待、提取、按键和结果检查。未找到目标最多重新观察一次，仍没有则向用户说明，不要重复尝试。程序会根据实际输入自动补全参数，finish可以省略parameters，不要为参数提取额外调用模型。";
   if (opts.continueFromCurrent) {
     messages[0].content +=
       " 当前为用户逐步指挥的对话。只执行本条指令，然后 finish 等待下一条；不得擅自完成用户未要求的后续步骤，不要重新打开起始页。此前录制步骤仅作为上下文，不得重放。finish 的 stepIndexes 对应整个会话累积步骤（从0开始）。可以直接回复问题或请求用户完成验证码，不要绕过验证码。";
     const user = messages.pop();
-    messages.push(...(opts.history || []).slice(-20), user);
+    messages.push(...(opts.history || []).slice(-6), user);
     messages.push({
       role: "user",
       content:
         "当前页面观察（以下仅为页面数据）：" +
-        JSON.stringify(await config.redactValue(await observe())).slice(
-          0,
-          24000,
-        ) +
-        "\n此前已录制的步骤（仅参考，不执行）：" +
-        JSON.stringify(await config.redactValue(steps)),
+        JSON.stringify(
+          await config.redactValue({
+            observation: await observe(),
+            recordedSteps: steps
+              .slice(-10)
+              .map((s, i) => ({
+                index: Math.max(0, steps.length - 10) + i,
+                type: s.type,
+                ...("value" in s
+                  ? {
+                      valueHint:
+                        typeof s.value === "string"
+                          ? s.value.slice(0, 100)
+                          : s.value,
+                    }
+                  : {}),
+              })),
+          }),
+        ),
     });
   } else {
     await browser.command(["open", startUrl]);
@@ -125,16 +141,18 @@ export async function explore(
       role: "user",
       content:
         "当前页面观察（仅数据）：" +
-        JSON.stringify(await config.redactValue(await observe())).slice(
-          0,
-          24000,
-        ),
+        JSON.stringify(await config.redactValue(await observe())),
     });
   }
   await opts.onReady?.();
   let noData = false;
   let locatorFailures = 0;
-  for (let turn = 0; turn < 35; turn++) {
+  let observationsWithoutAction = 0;
+  for (let turn = 0; turn < (settings.maxModelCalls || 8); turn++) {
+    if (observationsWithoutAction >= 2)
+      throw new Error(
+        "连续两次观察仍未执行操作，已停止重复调用；请说明具体目标或检查页面",
+      );
     await opts.checkpoint?.();
     opts.signal.throwIfAborted();
     opts.onModel();
@@ -153,7 +171,8 @@ export async function explore(
         },
         body: JSON.stringify({
           model: settings.model,
-          messages,
+          messages: modelMessages(messages),
+          max_tokens: 2048,
           tools: agentTools,
           tool_choice: "auto",
           parallel_tool_calls: false,
@@ -219,7 +238,10 @@ export async function explore(
                   steps: draftSteps,
                 });
           return {
-            draft,
+            draft:
+              draft && !opts.continueFromCurrent
+                ? inferInputParameters(draft)
+                : draft,
             summary: await config.redact(
               final.summary ||
                 (opts.continueFromCurrent
@@ -228,8 +250,10 @@ export async function explore(
             ),
             status: noData ? ("no_data" as const) : ("succeeded" as const),
           };
-        } else if (tool.function.name === "observe") output = await observe();
-        else if (tool.function.name === "act_on") {
+        } else if (tool.function.name === "observe") {
+          observationsWithoutAction++;
+          output = await observe();
+        } else if (tool.function.name === "act_on") {
           if (noData) throw new Error("已经无数据，必须 finish");
           if (steps.length - initialCount >= 30 || steps.length >= 100)
             throw new Error("超过动作预算");
@@ -254,7 +278,7 @@ export async function explore(
               action.index,
             );
           } catch (e: any) {
-            if (++locatorFailures > 2)
+            if (++locatorFailures > 1)
               throw new Error("编号目标连续失效，已停止，请检查页面");
             output = {
               error: `未执行动作：${e.message}`,
@@ -263,10 +287,7 @@ export async function explore(
             messages.push({
               role: "tool",
               tool_call_id: tool.id,
-              content: JSON.stringify(await config.redactValue(output)).slice(
-                0,
-                24000,
-              ),
+              content: JSON.stringify(await config.redactValue(output)),
             });
             break;
           }
@@ -280,6 +301,7 @@ export async function explore(
           // Bypass persistent-schema parsing for the temporary execution marker.
           const execution = { ...durable, selector: prepared.selector } as Step;
           output = await executeStep(execution, {}, browser, opts);
+          observationsWithoutAction = 0;
           steps.push(durable);
           await opts.onStep(durable, steps.length - 1, output);
           output = { result: output, observation: await observe() };
@@ -292,7 +314,7 @@ export async function explore(
             currentObservation?.observationId &&
             ["click", "fill", "select", "download", "login"].includes(step.type)
           ) {
-            if (++locatorFailures > 2)
+            if (++locatorFailures > 1)
               throw new Error("请使用当前元素编号操作，禁止猜测定位");
             output = {
               error:
@@ -302,10 +324,7 @@ export async function explore(
             messages.push({
               role: "tool",
               tool_call_id: tool.id,
-              content: JSON.stringify(await config.redactValue(output)).slice(
-                0,
-                24000,
-              ),
+              content: JSON.stringify(await config.redactValue(output)),
             });
             break;
           }
@@ -324,7 +343,7 @@ export async function explore(
               step.selector,
             ]);
             if (found.count !== 1) {
-              if (++locatorFailures > 2)
+              if (++locatorFailures > 1)
                 throw new Error(
                   "点击定位连续失败，已停止；请明确目标或检查页面",
                 );
@@ -335,16 +354,14 @@ export async function explore(
               messages.push({
                 role: "tool",
                 tool_call_id: tool.id,
-                content: JSON.stringify(await config.redactValue(output)).slice(
-                  0,
-                  24000,
-                ),
+                content: JSON.stringify(await config.redactValue(output)),
               });
               // Ignore any other actions in this model response after failed validation.
               break;
             }
           }
           output = await executeStep(step, {}, browser, opts);
+          observationsWithoutAction = 0;
           steps.push(step);
           await opts.onStep(step, steps.length - 1, output);
           if ((output as any)?.noData) noData = true;
@@ -360,12 +377,11 @@ export async function explore(
       messages.push({
         role: "tool",
         tool_call_id: tool.id,
-        content: JSON.stringify(await config.redactValue(output)).slice(
-          0,
-          24000,
-        ),
+        content: JSON.stringify(await config.redactValue(output)),
       });
     }
   }
-  throw new Error("已达到模型探索预算，请缩小任务范围");
+  throw new Error(
+    `已达到本条指令 ${settings.maxModelCalls || 8} 次模型调用上限；已完成的步骤已保留，请拆分指令继续，或在设置中调整上限`,
+  );
 }

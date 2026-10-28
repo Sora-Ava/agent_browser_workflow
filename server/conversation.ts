@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { inferInputParameters } from "../shared/input-parameters.ts";
 import {
   stepSchema,
   workflowSchema,
@@ -95,14 +96,16 @@ export class Conversation {
     );
     this.value.draft =
       this.value.startUrl && steps.length
-        ? workflowSchema.parse({
-            name: draft?.name || this.value.draft?.name || "对话录制流程",
-            startUrl: this.value.startUrl,
-            parameters: [...parameters.values()].filter((p) =>
-              used.has(p.name),
-            ),
-            steps,
-          })
+        ? inferInputParameters(
+            workflowSchema.parse({
+              name: draft?.name || this.value.draft?.name || "对话录制流程",
+              startUrl: this.value.startUrl,
+              parameters: [...parameters.values()].filter((p) =>
+                used.has(p.name),
+              ),
+              steps,
+            }),
+          )
         : null;
   }
 }

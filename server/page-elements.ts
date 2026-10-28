@@ -74,6 +74,49 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
         getComputedStyle(el.parentElement).cursor !== "pointer")
     );
   };
+  const dialogSelector =
+    'dialog[open],[role="dialog"],[aria-modal="true"],.el-dialog,.el-drawer,.ant-modal-content,.ant-drawer-content,.layui-layer,.vxe-modal--box,.ivu-modal-content,.van-popup';
+  const portalSelector =
+    '[role="listbox"],.el-select-dropdown,.el-popper,.ant-select-dropdown,.ant-picker-dropdown,.ivu-select-dropdown';
+  const surfaceName = (el: Element) => {
+    const labelled = (el.getAttribute("aria-labelledby") || "")
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent || "")
+      .join(" ");
+    return norm(
+      el.getAttribute("aria-label") ||
+        labelled ||
+        el.querySelector(
+          ".el-dialog__title,.el-drawer__title,.ant-modal-title,.ant-drawer-title,.layui-layer-title,.vxe-modal--title,.ivu-modal-header,h1,h2,h3",
+        )?.textContent ||
+        "弹出窗口",
+    );
+  };
+  const activeDialog = () => {
+    const roots = Array.from(document.querySelectorAll(dialogSelector)).filter(
+      (el) => {
+        const r = el.getBoundingClientRect();
+        return (
+          visible(el) &&
+          r.width > 0 &&
+          r.height > 0 &&
+          r.bottom > 0 &&
+          r.right > 0 &&
+          r.top < innerHeight &&
+          r.left < innerWidth
+        );
+      },
+    );
+    const z = (el: Element) => {
+      let n = 0;
+      for (let p: Element | null = el; p; p = p.parentElement)
+        n = Math.max(n, Number.parseInt(getComputedStyle(p).zIndex) || 0);
+      return n;
+    };
+    return roots
+      .map((el, i) => ({ el, i, z: z(el) }))
+      .sort((a, b) => b.z - a.z || b.i - a.i)[0]?.el;
+  };
   const describe = (el: Element) => {
     const labelled = (el.getAttribute("aria-labelledby") || "")
       .split(/\s+/)
@@ -121,12 +164,13 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
     ) {
       if (
         !p.matches(
-          'section,form,nav,fieldset,[role="dialog"],[role="tabpanel"],[role="group"],.el-form-item,.ant-form-item,.form-group',
+          'section,form,nav,fieldset,[role="dialog"],[role="tabpanel"],[role="group"],.el-form-item,.ant-form-item,.form-group,' +
+            dialogSelector,
         )
       )
         continue;
       const h = p.querySelector(
-        "h1,h2,h3,h4,legend,label,.el-form-item__label,.ant-form-item-label",
+        "h1,h2,h3,h4,legend,label,.el-form-item__label,.ant-form-item-label,.el-dialog__title,.el-drawer__title,.ant-modal-title,.layui-layer-title,.vxe-modal--title",
       );
       const value = norm(p.getAttribute("aria-label") || h?.textContent || "");
       if (value) {
@@ -143,8 +187,21 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
       region,
     };
   };
-  const candidates = () =>
-    Array.from(document.querySelectorAll("body *")).filter(interactive);
+  const candidates = () => {
+    const dialog = activeDialog();
+    const portals = dialog
+      ? Array.from(document.querySelectorAll(portalSelector)).filter(
+          (el) => visible(el) && hit(el),
+        )
+      : [];
+    return Array.from(document.querySelectorAll("body *")).filter(
+      (el) =>
+        (!dialog ||
+          dialog.contains(el) ||
+          portals.some((p) => p.contains(el))) &&
+        interactive(el),
+    );
+  };
   const equivalent = (a: any, b: any) =>
     a.tag === b.tag &&
     a.role === b.role &&
@@ -204,6 +261,10 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
       observationId: arg.id,
       elements,
       truncated: elements.length === 160,
+      surface: activeDialog()
+        ? { type: "dialog", name: surfaceName(activeDialog()!) }
+        : { type: "page", name: document.title },
+      context: norm((activeDialog() || document.body).textContent),
     };
   }
   if (op === "prepare") {

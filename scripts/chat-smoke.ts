@@ -182,11 +182,43 @@ try {
     "产品 A",
   );
   await waitMessage("已查询完成");
+  await ui.command(["scrollintoview", ".input-review-row"]);
+  await ui.command(["uncheck", ".parameter-toggle input[type=checkbox]"]);
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        'document.querySelector(".parameter-toggle input").checked',
+      ])
+    ).result,
+    false,
+  );
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        'document.querySelector(".input-review-row").textContent.includes("固定值")',
+      ])
+    ).result,
+    true,
+  );
+  await ui.command(["check", ".parameter-toggle input[type=checkbox]"]);
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        'document.querySelector(".parameter-toggle input").checked',
+      ])
+    ).result,
+    true,
+  );
   await ui.command(["screenshot", resolve("data/ui-chat-turns.png")]);
   await ui.command(["scrollintoview", ".draft-panel button.primary"]);
   await click("保存完整流程");
   await until(async () => app.store.list().length === 1, "flow save failed");
   const first = app.store.list()[0];
+  assert.equal(first.parameters.length, 1);
+  assert.equal(first.parameters[0].defaultValue, "产品 A");
   app.store.saveVersion(first.id, app.store.get(first.id));
   await ui.command(["find", "role", "button", "click", "--name", "我的流程"]);
   await until(

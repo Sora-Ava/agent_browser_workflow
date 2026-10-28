@@ -1054,3 +1054,23 @@ textarea::placeholder {
     gap: 8px;
   }
 }
+.input-review-row {
+  padding: 14px 0;
+  border-top: 1px solid #e4e8ee;
+}
+.parameter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.parameter-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.parameter-toggle small {
+  margin-left: auto;
+  color: #64748b;
+  font-weight: 400;
+}
