@@ -2,6 +2,20 @@ import { useEffect, useState, useRef } from "react";
 import type { Workflow, Step } from "../shared/workflow.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
 import { inputRows, toggleInputParameter } from "../shared/input-parameters.ts";
+function targetLabel(selector: string) {
+  try {
+    const d = selector.startsWith("element:")
+      ? JSON.parse(selector.slice(8))
+      : selector.startsWith("text:")
+        ? JSON.parse(selector.slice(5))
+        : null;
+    return d
+      ? [d.region, d.name || d.text || d.tag].filter(Boolean).join(" / ")
+      : selector;
+  } catch {
+    return selector;
+  }
+}
 
 async function api(path: string, method = "GET", body?: unknown) {
   const response = await fetch("/api/" + path, {
@@ -708,7 +722,81 @@ export function App() {
                     {selected.steps.map((s: Step, i: number) => (
                       <p key={i}>
                         {i + 1}. {stepText[s.type]}{" "}
-                        {"selector" in s ? s.selector : ""}
+                        {"selector" in s ? targetLabel(s.selector) : ""}
+                        {"selector" in s && (
+                          <button
+                            disabled={running || !browserReady}
+                            onClick={() =>
+                              act(async () => {
+                                await api("manual/start", "POST", {
+                                  workflowId: selected.id,
+                                  index: i,
+                                });
+                                setNotice(
+                                  "请到独立浏览器选择目标（按住Alt可选父元素，不会触发操作），再点击本步骤的确认替换；Esc后请点取消选择以释放会话。",
+                                );
+                              })
+                            }
+                          >
+                            手动选元素
+                          </button>
+                        )}
+                        {"selector" in s && (
+                          <button
+                            disabled={running || !browserReady}
+                            onClick={() =>
+                              act(async () => {
+                                const updated = await api(
+                                  "manual/replace",
+                                  "POST",
+                                  { workflowId: selected.id, index: i },
+                                );
+                                await refresh();
+                                choose(updated);
+                                setNotice(
+                                  "定位已验证并保存为新版本，旧版本保留。",
+                                );
+                              })
+                            }
+                          >
+                            确认替换定位
+                          </button>
+                        )}
+                        {"selector" in s && (
+                          <button
+                            disabled={running || !browserReady}
+                            onClick={() =>
+                              act(async () => {
+                                await api("manual/cancel", "POST", {});
+                                setNotice("元素选择已结束。");
+                              })
+                            }
+                          >
+                            取消选择
+                          </button>
+                        )}
+                        <button
+                          disabled={running || !browserReady}
+                          onClick={() =>
+                            act(async () => {
+                              if (
+                                !window.confirm(
+                                  "将在当前网页实际执行此步骤一次，继续吗？",
+                                )
+                              )
+                                return;
+                              await api("manual/test", "POST", {
+                                workflowId: selected.id,
+                                index: i,
+                                values,
+                                credentialId: credentialId || undefined,
+                              });
+                              setState(await api("state"));
+                            })
+                          }
+                        >
+                          单步测试
+                        </button>
                       </p>
                     ))}
                   </details>

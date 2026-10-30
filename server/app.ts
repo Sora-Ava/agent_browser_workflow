@@ -11,7 +11,8 @@ import { Config } from "./config.ts";
 import { Store } from "./store.ts";
 import { Browser } from "./browser.ts";
 import { explore } from "./agent.ts";
-import { runWorkflow } from "./engine.ts";
+import { runWorkflow, executeStep } from "./engine.ts";
+import { pickerPage } from "./picker.ts";
 import {
   workflowSchema,
   validateValues,
@@ -55,6 +56,8 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
     browser = new Browser(dataDir, session);
   let active: any = null;
   let controller: RunControl | undefined;
+  let manualBusy = false;
+  let pickerTarget: { workflowId: string; index: number } | null = null;
   const live = new LiveFrames(browser);
   const conversation = new Conversation(store.conversation());
   const browserState: {
@@ -258,7 +261,12 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
               .optional(),
           })
           .parse(await body(req));
-        if (controller || browserState.status === "starting") {
+        if (
+          controller ||
+          manualBusy ||
+          pickerTarget ||
+          browserState.status === "starting"
+        ) {
           send(res, 409, { error: "已有任务或浏览器正在启动" });
           return;
         }
@@ -283,7 +291,12 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         return;
       }
       if (path === "/api/conversation/reset" && req.method === "POST") {
-        if (controller || browserState.status === "starting") {
+        if (
+          controller ||
+          manualBusy ||
+          pickerTarget ||
+          browserState.status === "starting"
+        ) {
           send(res, 409, { error: "请先停止当前任务再新建会话" });
           return;
         }
@@ -319,7 +332,7 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         return;
       }
       if (path === "/api/credentials" && req.method === "POST") {
-        if (controller) {
+        if (controller || manualBusy || pickerTarget) {
           send(res, 409, { error: "运行时不能修改凭据" });
           return;
         }
@@ -330,12 +343,113 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         send(res, 200, store.list());
         return;
       }
+      if (path.startsWith("/api/manual/") && req.method === "POST") {
+        if (controller || manualBusy || browserState.status !== "ready") {
+          send(res, 409, { error: "请先启动浏览器，并等待当前任务完成" });
+          return;
+        }
+        manualBusy = true;
+        try {
+          const input = (await body(req)) as any;
+          if (path === "/api/manual/start") {
+            const workflowId = z.uuid().parse(input.workflowId);
+            const flow = store.get(workflowId);
+            const index = z
+              .number()
+              .int()
+              .min(0)
+              .max(flow.steps.length - 1)
+              .parse(input.index);
+            if (!("selector" in flow.steps[index]))
+              throw new Error("此步骤没有单一目标");
+            await browser.observe(true);
+            await browser.command([
+              "eval",
+              `(() => {const __name=(f,n)=>f;return (${pickerPage.toString()})("start")})()`,
+            ]);
+            pickerTarget = { workflowId, index };
+            send(res, 200, { ok: true });
+            return;
+          }
+          if (path === "/api/manual/cancel") {
+            await browser.command([
+              "eval",
+              `(() => {const __name=(f,n)=>f;return (${pickerPage.toString()})("cancel")})()`,
+            ]);
+            pickerTarget = null;
+            send(res, 200, { ok: true });
+            return;
+          }
+          const flow = store.get(z.uuid().parse(input.workflowId));
+          const index = z
+            .number()
+            .int()
+            .min(0)
+            .max(flow.steps.length - 1)
+            .parse(input.index);
+          const step = flow.steps[index];
+          if (path === "/api/manual/replace") {
+            if (
+              pickerTarget?.workflowId !== input.workflowId ||
+              pickerTarget?.index !== index
+            )
+              throw new Error("请先为本步骤启动元素选择");
+            if (!("selector" in step))
+              throw new Error("此步骤没有可替换的单一目标");
+            const picked = await browser.command([
+              "eval",
+              `(() => {const __name=(f,n)=>f;return (${pickerPage.toString()})("status")})()`,
+            ]);
+            if (!picked.result) throw new Error("请先到浏览器点击选择一个元素");
+            const prepared = await browser.prepareIndexed(
+              picked.result.observationId,
+              picked.result.index,
+            );
+            await browser.command([
+              "eval",
+              `(() => {const __name=(f,n)=>f;return (${pickerPage.toString()})("cancel")})()`,
+            ]);
+            step.selector = prepared.locator;
+            pickerTarget = null;
+            send(
+              res,
+              200,
+              store.saveVersion(input.workflowId, workflowSchema.parse(flow)),
+            );
+            return;
+          }
+          if (path === "/api/manual/test") {
+            if (pickerTarget) throw new Error("请先确认或取消元素选择");
+            const credential = input.credentialId
+              ? await config.credential(z.uuid().parse(input.credentialId))
+              : undefined;
+            const values = z
+              .record(z.string(), z.string())
+              .parse(input.values || {});
+            perform("step-test", async (signal, onStep) => {
+              const output = await executeStep(step, values, browser, {
+                signal,
+                onStep,
+                credential,
+                downloadDir: (await config.read()).downloadDir,
+              });
+              await onStep(step, index, output);
+              return { status: "succeeded", output };
+            });
+            send(res, 202, { ok: true });
+            return;
+          }
+          throw new Error("不支持的手动操作");
+        } finally {
+          manualBusy = false;
+        }
+      }
       if (path === "/api/workflows" && req.method === "POST") {
         send(res, 201, store.save(workflowSchema.parse(await body(req))));
         return;
       }
       if (path.startsWith("/api/workflows/") && req.method === "DELETE") {
-        if (controller) {
+        if (controller || manualBusy || pickerTarget) {
           send(res, 409, { error: "运行期间不能删除流程" });
           return;
         }
@@ -375,7 +489,7 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
           path === "/api/chat") &&
         req.method === "POST"
       ) {
-        if (controller) {
+        if (controller || manualBusy || pickerTarget) {
           send(res, 409, { error: "已有任务正在运行" });
           return;
         }
@@ -411,7 +525,12 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
             throw new Error("起始网址与凭据站点不一致");
         }
         // Reserve the single-run lock before any further await.
-        if (controller || browserState.status !== "ready") {
+        if (
+          controller ||
+          manualBusy ||
+          pickerTarget ||
+          browserState.status !== "ready"
+        ) {
           send(res, 409, {
             error: controller ? "已有任务正在运行" : "浏览器尚未启动完成",
           });

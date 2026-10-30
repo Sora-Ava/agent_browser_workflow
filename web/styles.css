@@ -1074,3 +1074,9 @@ textarea::placeholder {
   color: #64748b;
   font-weight: 400;
 }
+.details p > button {
+  display: inline-block;
+  margin: 6px 6px 0 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}

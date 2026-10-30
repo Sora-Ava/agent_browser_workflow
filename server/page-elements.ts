@@ -10,6 +10,7 @@ const descriptor = z.strictObject({
     z.string().max(240),
   ),
   region: z.string().max(240),
+  manual: z.boolean().optional(),
 });
 export function parseElementLocator(value: string) {
   return value.startsWith("element:")
@@ -187,7 +188,7 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
       region,
     };
   };
-  const candidates = () => {
+  const candidates = (manual = false) => {
     const dialog = activeDialog();
     const portals = dialog
       ? Array.from(document.querySelectorAll(portalSelector)).filter(
@@ -199,7 +200,12 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
         (!dialog ||
           dialog.contains(el) ||
           portals.some((p) => p.contains(el))) &&
-        interactive(el),
+        (manual
+          ? visible(el) &&
+            enabled(el) &&
+            !el.matches("script,style,noscript") &&
+            !el.closest("[data-abw-ignore]")
+          : interactive(el)),
     );
   };
   const equivalent = (a: any, b: any) =>
@@ -209,7 +215,9 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
     a.text === b.text &&
     a.region === b.region;
   const resolve = (d: any) => {
-    let found = candidates().filter((el) => equivalent(describe(el), d));
+    let found = candidates(Boolean(d.manual)).filter((el) =>
+      equivalent(describe(el), d),
+    );
     // Attributes disambiguate structure only after semantic identity matches.
     // Never use DOM order or an ordinal fallback for duplicate Chinese labels.
     if (!d.name && !d.text && !Object.keys(d.attrs).length) return [];
@@ -241,10 +249,10 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
     const map = new Map<number, any>();
     const elements: any[] = [];
     let index = 0;
-    for (const el of candidates()) {
+    for (const el of candidates(Boolean(arg.manual))) {
       if (!hit(el)) continue;
-      if (elements.length >= 160) break;
-      const d = describe(el);
+      if (elements.length >= (arg.manual ? 2000 : 160)) break;
+      const d = { ...describe(el), ...(arg.manual ? { manual: true } : {}) };
       index++;
       map.set(index, { el, descriptor: d });
       elements.push({
@@ -278,7 +286,10 @@ export function pageElements(op: "observe" | "prepare" | "resolve", arg: any) {
       !visible(entry.el) ||
       !enabled(entry.el) ||
       !hit(entry.el) ||
-      JSON.stringify(describe(entry.el)) !== JSON.stringify(entry.descriptor)
+      JSON.stringify({
+        ...describe(entry.el),
+        ...(entry.descriptor.manual ? { manual: true } : {}),
+      }) !== JSON.stringify(entry.descriptor)
     )
       throw new Error("目标已变化、不可操作或已离开页面，请重新观察");
     const found = resolve(entry.descriptor);
