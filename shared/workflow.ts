@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { graphSchema, graphErrors } from "./graph.ts";
 
 const selector = z
   .string()
@@ -77,9 +78,19 @@ export const workflowSchema = z
     name: z.string().min(1).max(100),
     startUrl: z.url().refine((s) => /^https?:/.test(s)),
     parameters: z.array(parameterSchema).max(30),
-    steps: z.array(stepSchema).min(1).max(100),
+    steps: z.array(stepSchema).max(100),
+    graph: graphSchema.optional(),
   })
   .superRefine((w, ctx) => {
+    if (!w.graph && !w.steps.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["steps"],
+        message: "顺序流程至少包含一个步骤",
+      });
+    if (w.graph)
+      for (const message of graphErrors(w.graph, w.steps.length))
+        ctx.addIssue({ code: "custom", path: ["graph"], message });
     const names = new Set(w.parameters.map((p) => p.name));
     if (names.size !== w.parameters.length)
       ctx.addIssue({ code: "custom", message: "参数名称重复" });

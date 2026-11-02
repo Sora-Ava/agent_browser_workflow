@@ -137,7 +137,7 @@ export class Browser {
   async prepareIndexed(id: string, index: number) {
     return this.elementOperation("prepare", { id, index, token: randomUUID() });
   }
-  async observe() {
+  async observe(manual = false) {
     const snapshot = await this.command(["snapshot"]);
     // Application-owned, read-only DOM inspection. The model cannot supply JavaScript.
     const targets = await this.command([
@@ -146,6 +146,7 @@ export class Browser {
     ]);
     const indexed = await this.elementOperation("observe", {
       id: randomUUID(),
+      manual,
     });
     // Put actionable numbered targets first so prompt size limits do not hide them.
     return { ...indexed, snapshot: snapshot.snapshot, targets: targets.result };
