@@ -16,6 +16,12 @@ export interface BrowserPort {
   command(args: string[]): Promise<any>;
 }
 export interface ExecutionOptions {
+  onNode?: (event: {
+    nodeId: string;
+    status: "running" | "succeeded" | "failed";
+    error?: string;
+    result?: unknown;
+  }) => Promise<void>;
   signal: AbortSignal;
   onStep: (step: Step, index: number, output?: unknown) => Promise<void>;
   downloadDir?: string;
@@ -142,9 +148,113 @@ export async function runWorkflow(
   opts: ExecutionOptions,
 ) {
   validateValues(workflow, values);
+  if (workflow.graph) workflow = workflowSchema.parse(workflow);
   opts.signal.throwIfAborted();
   await browser.command(["open", workflow.startUrl]);
   await opts.onReady?.();
+  if (workflow.graph) {
+    // Graphs are deterministic: a failing node stops, never repeats a submitted action.
+    const nodes = new Map(workflow.graph!.nodes.map((n) => [n.id, n]));
+    let id = workflow.graph!.entry;
+    const outputs: unknown[] = [];
+    for (let visited = 0; visited < workflow.graph!.nodes.length; visited++) {
+      await opts.checkpoint?.();
+      opts.signal.throwIfAborted();
+      const node = nodes.get(id)!;
+      await opts.onNode?.({ nodeId: id, status: "running" });
+      try {
+        opts.signal.throwIfAborted();
+        if (node.kind === "end") {
+          await opts.onNode?.({
+            nodeId: id,
+            status: "succeeded",
+            result: { message: node.message },
+          });
+          return {
+            status: node.status,
+            summary: node.message,
+            outputs,
+            repairs: 0,
+            repairedWorkflow: undefined,
+          };
+        }
+        if (node.kind === "condition") {
+          await browser.command(["wait", node.readySelector]);
+          opts.signal.throwIfAborted();
+          const ready = await browser.command([
+            "get",
+            "count",
+            node.readySelector,
+          ]);
+          if (ready.count !== 1) throw new Error("结果就绪定位必须唯一");
+          const found = await browser.command(["get", "count", node.selector]);
+          if (
+            found.count !== 1 ||
+            !Number.isInteger(found.count) ||
+            found.count < 0
+          )
+            throw new Error(
+              "条件定位不存在、不唯一或返回无效；请使用稳定目标，避免误走否分支",
+            );
+          let matched = false;
+          if (node.test === "textContains") {
+            if (found.count !== 1) throw new Error("待检查文字元素不存在");
+            if (
+              !(await browser.command(["is", "visible", node.selector])).visible
+            )
+              throw new Error("待检查文字元素不可见");
+            const content = await browser.command([
+              "get",
+              "text",
+              node.selector,
+            ]);
+            if (typeof content.text !== "string")
+              throw new Error("文字读取结果无效");
+            matched = content.text.includes(node.text!);
+          } else if (found.count === 1) {
+            const state = await browser.command([
+              "is",
+              "visible",
+              node.selector,
+            ]);
+            if (typeof state.visible !== "boolean")
+              throw new Error("可见状态无效");
+            matched = state.visible;
+          }
+          outputs.push({ nodeId: id, matched });
+          await opts.onNode?.({
+            nodeId: id,
+            status: "succeeded",
+            result: { matched },
+          });
+          id = matched ? node.yes : node.no;
+        } else {
+          const step = workflow.steps[node.stepIndex];
+          const result = await executeStep(step, values, browser, opts);
+          outputs.push(result);
+          await opts.onStep(step, node.stepIndex, result);
+          await opts.onNode?.({ nodeId: id, status: "succeeded", result });
+          if (result?.noData)
+            return {
+              status: "no_data" as const,
+              summary: "未查询到数据",
+              outputs,
+              repairs: 0,
+              repairedWorkflow: undefined,
+            };
+          id = node.next;
+        }
+      } catch (e: any) {
+        await opts.onNode?.({
+          nodeId: node.id,
+          status: "failed",
+          error: e.message,
+        });
+        throw e;
+      }
+    }
+    throw new Error("流程图未正常结束");
+  }
   const current = structuredClone(workflow);
   let repairs = 0;
   const outputs: unknown[] = [];

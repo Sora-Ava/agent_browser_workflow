@@ -559,6 +559,7 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
               replay?.startUrl ||
               ("startUrl" in input ? input.startUrl : undefined);
             active.workflowName = replay?.name;
+            if (replay && "id" in input) active.workflowId = input.id;
             const control = controller!;
             const controlledBrowser = new Proxy(browser, {
               get(target, property, receiver) {
@@ -578,6 +579,13 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
               tempDir: join(dataDir, "pending"),
               checkpoint: () => control.checkpoint(),
               onReady: () => live.start(),
+              onNode: async (event: any) => {
+                active.nodeStates ??= {};
+                active.nodeStates[event.nodeId] =
+                  await config.redactValue(event);
+                active.currentNode = event.nodeId;
+                store.saveRun(active);
+              },
             };
             if (path === "/api/chat" && "instruction" in input) {
               const previous = conversation.state();

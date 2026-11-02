@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { workflowSchema, type Workflow } from "../shared/workflow.ts";
 import { renameParameter } from "../shared/workflow-edit.ts";
-const labels: Record<string, string> = {
+export const labels: Record<string, string> = {
   login: "登录",
   navigate: "打开网址",
   click: "点击",
@@ -13,7 +13,7 @@ const labels: Record<string, string> = {
   extract: "读取文字",
   download: "下载文件",
 };
-const fields: Record<string, string> = {
+export const fields: Record<string, string> = {
   selector: "目标定位",
   url: "网址",
   key: "按键",
@@ -25,7 +25,7 @@ const fields: Record<string, string> = {
   emptySelector: "无数据标志",
   dataSelector: "有数据标志",
 };
-const defaults: Record<string, any> = {
+export const defaults: Record<string, any> = {
   click: { selector: "" },
   fill: { selector: "", value: "" },
   select: { selector: "", value: "" },
@@ -209,21 +209,21 @@ export function WorkflowEditor({
               <strong>步骤 {i + 1}</strong>
               <button
                 type="button"
-                disabled={i === 0}
+                disabled={Boolean(flow.graph) || i === 0}
                 onClick={() => move(i, -1)}
               >
                 上移
               </button>
               <button
                 type="button"
-                disabled={i === flow.steps.length - 1}
+                disabled={Boolean(flow.graph) || i === flow.steps.length - 1}
                 onClick={() => move(i, 1)}
               >
                 下移
               </button>
               <button
                 type="button"
-                disabled={flow.steps.length === 1}
+                disabled={Boolean(flow.graph) || flow.steps.length === 1}
                 onClick={() =>
                   setFlow({
                     ...flow,
@@ -348,7 +348,7 @@ export function WorkflowEditor({
         ))}
         <button
           type="button"
-          disabled={flow.steps.length >= 100}
+          disabled={Boolean(flow.graph) || flow.steps.length >= 100}
           onClick={() =>
             setFlow({
               ...flow,

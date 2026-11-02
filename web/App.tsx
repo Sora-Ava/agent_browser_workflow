@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import type { Workflow, Step } from "../shared/workflow.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
 import { WorkflowEditor } from "./WorkflowEditor.tsx";
+import { GraphEditor } from "./GraphEditor.tsx";
 import { inputRows, toggleInputParameter } from "../shared/input-parameters.ts";
 function targetLabel(selector: string) {
   try {
@@ -162,6 +163,7 @@ export function App() {
   const [instruction, setInstruction] = useState("");
   const [draft, setDraft] = useState<Workflow | null>(null);
   const [editing, setEditing] = useState(false);
+  const [graphEditing, setGraphEditing] = useState(false);
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
   const [selected, setSelected] = useState<any>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -268,6 +270,7 @@ export function App() {
     }
   }
   function choose(w: any) {
+    setGraphEditing(false);
     setEditing(false);
     setSelected(w);
     setDraft(null);
@@ -603,6 +606,8 @@ export function App() {
                   <button
                     className="primary run-button"
                     disabled={
+                      editing ||
+                      graphEditing ||
                       running ||
                       busy ||
                       !browserReady ||
@@ -723,10 +728,19 @@ export function App() {
                   <details className="details">
                     <summary>查看保存的 {selected.steps.length} 个步骤</summary>
                     <button
-                      disabled={running || busy}
+                      disabled={running || busy || graphEditing}
                       onClick={() => setEditing(true)}
                     >
                       编辑步骤与参数
+                    </button>
+                    <button
+                      disabled={running || busy || editing}
+                      onClick={() => {
+                        setEditing(false);
+                        setGraphEditing(true);
+                      }}
+                    >
+                      编辑流程图
                     </button>
 
                     {selected.steps.map((s: Step, i: number) => (
@@ -932,6 +946,35 @@ export function App() {
                   await refresh();
                   choose(updated);
                   setNotice("编辑已保存为新版本，旧版本保留。");
+                }}
+              />
+            )}
+            {selected && (selected.graph || graphEditing) && (
+              <GraphEditor
+                key={selected.id + ":" + graphEditing}
+                workflow={selected}
+                editing={graphEditing && !running}
+                run={state.active}
+                onEdit={() => {
+                  if (editing) {
+                    setNotice("请先保存或取消步骤编辑");
+                    return;
+                  }
+                  if (!running) {
+                    setEditing(false);
+                    setGraphEditing(true);
+                  }
+                }}
+                onCancel={() => setGraphEditing(false)}
+                onSave={async (w) => {
+                  const updated = await api(
+                    "workflows/" + selected.id,
+                    "PUT",
+                    w,
+                  );
+                  await refresh();
+                  choose(updated);
+                  setNotice("流程图已保存为新版本，可使用运行流程执行。");
                 }}
               />
             )}
