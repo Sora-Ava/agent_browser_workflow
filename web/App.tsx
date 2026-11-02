@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import type { Workflow, Step } from "../shared/workflow.ts";
 import { demoWorkflow } from "../shared/demo-workflow.ts";
+import { WorkflowEditor } from "./WorkflowEditor.tsx";
 import { inputRows, toggleInputParameter } from "../shared/input-parameters.ts";
 function targetLabel(selector: string) {
   try {
@@ -160,6 +161,7 @@ export function App() {
   const [startUrl, setStartUrl] = useState("");
   const [instruction, setInstruction] = useState("");
   const [draft, setDraft] = useState<Workflow | null>(null);
+  const [editing, setEditing] = useState(false);
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
   const [selected, setSelected] = useState<any>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -266,6 +268,7 @@ export function App() {
     }
   }
   function choose(w: any) {
+    setEditing(false);
     setSelected(w);
     setDraft(null);
     setValues(
@@ -719,6 +722,13 @@ export function App() {
                 {selected && (
                   <details className="details">
                     <summary>查看保存的 {selected.steps.length} 个步骤</summary>
+                    <button
+                      disabled={running || busy}
+                      onClick={() => setEditing(true)}
+                    >
+                      编辑步骤与参数
+                    </button>
+
                     {selected.steps.map((s: Step, i: number) => (
                       <p key={i}>
                         {i + 1}. {stepText[s.type]}{" "}
@@ -908,6 +918,23 @@ export function App() {
                 )}
               </section>
             </div>
+            {editing && selected && (
+              <WorkflowEditor
+                key={selected.id}
+                workflow={selected}
+                onCancel={() => setEditing(false)}
+                onSave={async (w) => {
+                  const updated = await api(
+                    "workflows/" + selected.id,
+                    "PUT",
+                    w,
+                  );
+                  await refresh();
+                  choose(updated);
+                  setNotice("编辑已保存为新版本，旧版本保留。");
+                }}
+              />
+            )}
             {draft && !running && (
               <section className="draft-panel">
                 <div>

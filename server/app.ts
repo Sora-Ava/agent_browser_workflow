@@ -343,6 +343,18 @@ export function createApp(dataDir = resolve("data"), session = "abw-local") {
         send(res, 200, store.list());
         return;
       }
+      if (path.startsWith("/api/workflows/") && req.method === "PUT") {
+        const id = z
+          .uuid()
+          .parse(decodeURIComponent(path.slice("/api/workflows/".length)));
+        const flow = workflowSchema.parse(await body(req));
+        if (controller || manualBusy || pickerTarget) {
+          send(res, 409, { error: "请先结束运行或元素选择，再保存编辑" });
+          return;
+        }
+        send(res, 200, store.saveVersion(id, flow));
+        return;
+      }
       if (path.startsWith("/api/manual/") && req.method === "POST") {
         if (controller || manualBusy || browserState.status !== "ready") {
           send(res, 409, { error: "请先启动浏览器，并等待当前任务完成" });

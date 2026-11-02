@@ -1080,3 +1080,61 @@ textarea::placeholder {
   padding: 6px 10px;
   font-size: 12px;
 }
+.workflow-editor {
+  padding: 16px;
+  margin: 12px 0;
+  border: 1px solid #d9e1f0;
+  background: white;
+}
+.workflow-editor fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.editor-step,
+.editor-parameter {
+  padding: 14px 0;
+  border-top: 1px solid #e4e8ee;
+}
+.editor-step header,
+.editor-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 12px 0;
+}
+.workflow-editor button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.workflow-editor p[role="alert"] {
+  color: #b42318;
+}
+.workflow-editor {
+  margin: 24px 34px;
+  scroll-margin-top: 20px;
+}
+.workflow-editor .editor-step {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 20px;
+}
+.workflow-editor .editor-step header {
+  grid-column: 1 / -1;
+}
+.workflow-editor .editor-parameter {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+@media (max-width: 800px) {
+  .workflow-editor {
+    margin: 16px;
+  }
+  .workflow-editor .editor-step,
+  .workflow-editor .editor-parameter {
+    grid-template-columns: 1fr;
+  }
+}
