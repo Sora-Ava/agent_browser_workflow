@@ -724,107 +724,6 @@ export function App() {
                     ))
                   )}
                 </div>
-                {selected && (
-                  <details className="details">
-                    <summary>查看保存的 {selected.steps.length} 个步骤</summary>
-                    <button
-                      disabled={running || busy || graphEditing}
-                      onClick={() => setEditing(true)}
-                    >
-                      编辑步骤与参数
-                    </button>
-                    <button
-                      disabled={running || busy || editing}
-                      onClick={() => {
-                        setEditing(false);
-                        setGraphEditing(true);
-                      }}
-                    >
-                      编辑流程图
-                    </button>
-
-                    {selected.steps.map((s: Step, i: number) => (
-                      <p key={i}>
-                        {i + 1}. {stepText[s.type]}{" "}
-                        {"selector" in s ? targetLabel(s.selector) : ""}
-                        {"selector" in s && (
-                          <button
-                            disabled={running || !browserReady}
-                            onClick={() =>
-                              act(async () => {
-                                await api("manual/start", "POST", {
-                                  workflowId: selected.id,
-                                  index: i,
-                                });
-                                setNotice(
-                                  "请到独立浏览器选择目标（按住Alt可选父元素，不会触发操作），再点击本步骤的确认替换；Esc后请点取消选择以释放会话。",
-                                );
-                              })
-                            }
-                          >
-                            手动选元素
-                          </button>
-                        )}
-                        {"selector" in s && (
-                          <button
-                            disabled={running || !browserReady}
-                            onClick={() =>
-                              act(async () => {
-                                const updated = await api(
-                                  "manual/replace",
-                                  "POST",
-                                  { workflowId: selected.id, index: i },
-                                );
-                                await refresh();
-                                choose(updated);
-                                setNotice(
-                                  "定位已验证并保存为新版本，旧版本保留。",
-                                );
-                              })
-                            }
-                          >
-                            确认替换定位
-                          </button>
-                        )}
-                        {"selector" in s && (
-                          <button
-                            disabled={running || !browserReady}
-                            onClick={() =>
-                              act(async () => {
-                                await api("manual/cancel", "POST", {});
-                                setNotice("元素选择已结束。");
-                              })
-                            }
-                          >
-                            取消选择
-                          </button>
-                        )}
-                        <button
-                          disabled={running || !browserReady}
-                          onClick={() =>
-                            act(async () => {
-                              if (
-                                !window.confirm(
-                                  "将在当前网页实际执行此步骤一次，继续吗？",
-                                )
-                              )
-                                return;
-                              await api("manual/test", "POST", {
-                                workflowId: selected.id,
-                                index: i,
-                                values,
-                                credentialId: credentialId || undefined,
-                              });
-                              setState(await api("state"));
-                            })
-                          }
-                        >
-                          单步测试
-                        </button>
-                      </p>
-                    ))}
-                  </details>
-                )}
               </section>
               <section className="browser-panel">
                 <div className="browser-toolbar">
@@ -936,6 +835,7 @@ export function App() {
               <WorkflowEditor
                 key={selected.id}
                 workflow={selected}
+                parametersOnly
                 onCancel={() => setEditing(false)}
                 onSave={async (w) => {
                   const updated = await api(
@@ -949,12 +849,121 @@ export function App() {
                 }}
               />
             )}
-            {selected && (selected.graph || graphEditing) && (
+            {selected && (
               <GraphEditor
                 key={selected.id + ":" + graphEditing}
                 workflow={selected}
                 editing={graphEditing && !running}
                 run={state.active}
+                onParameters={() => {
+                  if (!running && !busy) setEditing(true);
+                }}
+                renderStepActions={(s, i) => (
+                  <div className="node-actions">
+                    <h3>节点操作</h3>
+                    <p>
+                      {"selector" in s
+                        ? targetLabel(s.selector)
+                        : stepText[s.type]}
+                    </p>
+                    {"selector" in s && (
+                      <button
+                        disabled={
+                          running ||
+                          busy ||
+                          !browserReady ||
+                          editing ||
+                          graphEditing
+                        }
+                        onClick={() =>
+                          act(async () => {
+                            await api("manual/start", "POST", {
+                              workflowId: selected.id,
+                              index: i,
+                            });
+                            setNotice(
+                              "请到独立浏览器选择目标（按住Alt可选父元素，不会触发操作），再点击节点面板的确认替换；Esc后请点取消选择以释放会话。",
+                            );
+                          })
+                        }
+                      >
+                        手动选元素
+                      </button>
+                    )}
+                    {"selector" in s && (
+                      <button
+                        disabled={
+                          running ||
+                          busy ||
+                          !browserReady ||
+                          editing ||
+                          graphEditing
+                        }
+                        onClick={() =>
+                          act(async () => {
+                            const updated = await api(
+                              "manual/replace",
+                              "POST",
+                              { workflowId: selected.id, index: i },
+                            );
+                            await refresh();
+                            choose(updated);
+                            setNotice("定位已验证并保存为新版本，旧版本保留。");
+                          })
+                        }
+                      >
+                        确认替换定位
+                      </button>
+                    )}
+                    {"selector" in s && (
+                      <button
+                        disabled={
+                          running ||
+                          busy ||
+                          !browserReady ||
+                          editing ||
+                          graphEditing
+                        }
+                        onClick={() =>
+                          act(async () => {
+                            await api("manual/cancel", "POST", {});
+                            setNotice("元素选择已结束。");
+                          })
+                        }
+                      >
+                        取消选择
+                      </button>
+                    )}
+                    <button
+                      disabled={
+                        running ||
+                        busy ||
+                        !browserReady ||
+                        editing ||
+                        graphEditing
+                      }
+                      onClick={() =>
+                        act(async () => {
+                          if (
+                            !window.confirm(
+                              "将在当前网页实际执行此步骤一次，继续吗？",
+                            )
+                          )
+                            return;
+                          await api("manual/test", "POST", {
+                            workflowId: selected.id,
+                            index: i,
+                            values,
+                            credentialId: credentialId || undefined,
+                          });
+                          setState(await api("state"));
+                        })
+                      }
+                    >
+                      单步测试
+                    </button>
+                  </div>
+                )}
                 onEdit={() => {
                   if (editing) {
                     setNotice("请先保存或取消步骤编辑");
