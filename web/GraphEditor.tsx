@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   toGraph,
   compactGraphWorkflow,
@@ -19,6 +19,8 @@ export function GraphEditor({
   onEdit,
   onCancel,
   onSave,
+  onParameters,
+  renderStepActions,
 }: {
   workflow: Workflow;
   editing: boolean;
@@ -26,6 +28,8 @@ export function GraphEditor({
   onEdit: () => void;
   onCancel: () => void;
   onSave: (w: Workflow) => Promise<void>;
+  onParameters: () => void;
+  renderStepActions: (step: Step, index: number) => ReactNode;
 }) {
   const [flow, setFlow] = useState<Workflow>(() => ({
     ...structuredClone(workflow),
@@ -164,7 +168,12 @@ export function GraphEditor({
               : "点击节点查看内容；运行时显示实际经过的路径。"}
           </p>
         </div>
-        {!editing && <button onClick={onEdit}>编辑流程图</button>}
+        <div className="graph-toolbar">
+          {!editing && (
+            <button onClick={onParameters}>编辑参数与流程信息</button>
+          )}
+          {!editing && <button onClick={onEdit}>编辑流程图</button>}
+        </div>
       </div>
       {belongs && run?.summary && <p role="status">{run.summary}</p>}
       {belongs && run?.error && (
@@ -317,6 +326,17 @@ export function GraphEditor({
         </div>
         <aside className="graph-inspector">
           {node && (
+            <header className="node-inspector-heading">
+              <small>当前节点</small>
+              <h3>{node.label}</h3>
+            </header>
+          )}
+          {node?.kind === "action" &&
+            step &&
+            !editing &&
+            renderStepActions(step, node.stepIndex)}
+          {editing && <p>保存流程图后，可在此测试节点或手动选择元素。</p>}
+          {node && (
             <fieldset disabled={locked}>
               <legend>节点设置</legend>
               <label>
@@ -383,7 +403,9 @@ export function GraphEditor({
                               e.target.value === "parameter" &&
                               !flow.parameters.length
                             ) {
-                              setError("请先在步骤与参数编辑器中添加参数");
+                              setError(
+                                "请先保存或取消流程图编辑，再通过“编辑参数与流程信息”添加参数",
+                              );
                               return;
                             }
                             patchStep(node.stepIndex, {

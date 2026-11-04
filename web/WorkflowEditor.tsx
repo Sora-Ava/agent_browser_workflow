@@ -46,10 +46,12 @@ export function WorkflowEditor({
   workflow,
   onSave,
   onCancel,
+  parametersOnly = false,
 }: {
   workflow: Workflow;
   onSave: (w: Workflow) => Promise<void>;
   onCancel: () => void;
+  parametersOnly?: boolean;
 }) {
   const [flow, setFlow] = useState<Workflow>(() => structuredClone(workflow));
   const panel = useRef<HTMLElement>(null);
@@ -94,7 +96,7 @@ export function WorkflowEditor({
   }
   return (
     <section ref={panel} className="workflow-editor" aria-label="流程编辑">
-      <h2>编辑流程与参数</h2>
+      <h2>{parametersOnly ? "编辑参数与流程信息" : "编辑流程与参数"}</h2>
       <p>编辑不会操作网页。保存为新版本后，可使用单步测试验证。</p>
       {error && <p role="alert">{error}</p>}
       <fieldset disabled={saving}>
@@ -202,162 +204,177 @@ export function WorkflowEditor({
         >
           添加参数
         </button>
-        <h3>操作步骤</h3>
-        {flow.steps.map((s, i) => (
-          <div className="editor-step" key={i}>
-            <header>
-              <strong>步骤 {i + 1}</strong>
-              <button
-                type="button"
-                disabled={Boolean(flow.graph) || i === 0}
-                onClick={() => move(i, -1)}
-              >
-                上移
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(flow.graph) || i === flow.steps.length - 1}
-                onClick={() => move(i, 1)}
-              >
-                下移
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(flow.graph) || flow.steps.length === 1}
-                onClick={() =>
-                  setFlow({
-                    ...flow,
-                    steps: flow.steps.filter((_, j) => i !== j),
-                  })
-                }
-              >
-                删除步骤
-              </button>
-            </header>
-            <label>
-              动作
-              <select
-                value={s.type}
-                onChange={(e) =>
-                  setFlow({
-                    ...flow,
-                    steps: flow.steps.map((x, j) =>
-                      j === i
-                        ? { type: e.target.value, ...defaults[e.target.value] }
-                        : x,
-                    ),
-                  })
-                }
-              >
-                {Object.entries(labels).map(([type, label]) => (
-                  <option key={type} value={type}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {Object.entries(s)
-              .filter(([k]) => k !== "type" && k !== "value")
-              .map(([k, v]) => (
-                <label key={k}>
-                  {fields[k] || k}
-                  {k === "key" ? (
-                    <select
-                      value={String(v)}
-                      onChange={(e) => patch(i, { [k]: e.target.value })}
-                    >
-                      {["Enter", "Tab", "Escape", "ArrowDown", "ArrowUp"].map(
-                        (key) => (
-                          <option key={key}>{key}</option>
-                        ),
-                      )}
-                    </select>
-                  ) : (
-                    <input
-                      value={String(v)}
-                      onChange={(e) => patch(i, { [k]: e.target.value })}
-                    />
-                  )}
-                </label>
-              ))}
-            {"value" in s && (
-              <>
-                <label>
-                  输入来源
-                  <select
-                    aria-label={`步骤 ${i + 1} 输入来源`}
-                    value={
-                      typeof s.value === "string"
-                        ? "fixed"
-                        : "parameter" in s.value
-                          ? "parameter"
-                          : s.value.credential
-                    }
-                    onChange={(e) => {
-                      const kind = e.target.value;
-                      if (kind === "parameter" && !flow.parameters.length) {
-                        setError("请先添加运行参数");
-                        return;
-                      }
-                      patch(i, {
-                        value:
-                          kind === "fixed"
-                            ? ""
-                            : kind === "parameter"
-                              ? { parameter: flow.parameters[0].name }
-                              : { credential: kind },
-                      });
-                    }}
+        {!parametersOnly && (
+          <>
+            <h3>操作步骤</h3>
+            {flow.steps.map((s, i) => (
+              <div className="editor-step" key={i}>
+                <header>
+                  <strong>步骤 {i + 1}</strong>
+                  <button
+                    type="button"
+                    disabled={Boolean(flow.graph) || i === 0}
+                    onClick={() => move(i, -1)}
                   >
-                    <option value="fixed">固定值</option>
-                    <option value="parameter">运行参数</option>
-                    <option value="username">已保存账号</option>
-                    <option value="password">已保存密码</option>
+                    上移
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      Boolean(flow.graph) || i === flow.steps.length - 1
+                    }
+                    onClick={() => move(i, 1)}
+                  >
+                    下移
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(flow.graph) || flow.steps.length === 1}
+                    onClick={() =>
+                      setFlow({
+                        ...flow,
+                        steps: flow.steps.filter((_, j) => i !== j),
+                      })
+                    }
+                  >
+                    删除步骤
+                  </button>
+                </header>
+                <label>
+                  动作
+                  <select
+                    value={s.type}
+                    onChange={(e) =>
+                      setFlow({
+                        ...flow,
+                        steps: flow.steps.map((x, j) =>
+                          j === i
+                            ? {
+                                type: e.target.value,
+                                ...defaults[e.target.value],
+                              }
+                            : x,
+                        ),
+                      })
+                    }
+                  >
+                    {Object.entries(labels).map(([type, label]) => (
+                      <option key={type} value={type}>
+                        {label}
+                      </option>
+                    ))}
                   </select>
                 </label>
-                {typeof s.value === "string" ? (
-                  <label>
-                    固定值
-                    <input
-                      value={s.value}
-                      onChange={(e) => patch(i, { value: e.target.value })}
-                    />
-                  </label>
-                ) : "parameter" in s.value ? (
-                  <label>
-                    绑定参数
-                    <select
-                      value={s.value.parameter}
-                      onChange={(e) =>
-                        patch(i, { value: { parameter: e.target.value } })
-                      }
-                    >
-                      {flow.parameters.map((p) => (
-                        <option key={p.name} value={p.name}>
-                          {p.label}（{p.name}）
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <p>运行时读取所选站点凭据，不在流程中保存账号密码正文。</p>
+                {Object.entries(s)
+                  .filter(([k]) => k !== "type" && k !== "value")
+                  .map(([k, v]) => (
+                    <label key={k}>
+                      {fields[k] || k}
+                      {k === "key" ? (
+                        <select
+                          value={String(v)}
+                          onChange={(e) => patch(i, { [k]: e.target.value })}
+                        >
+                          {[
+                            "Enter",
+                            "Tab",
+                            "Escape",
+                            "ArrowDown",
+                            "ArrowUp",
+                          ].map((key) => (
+                            <option key={key}>{key}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={String(v)}
+                          onChange={(e) => patch(i, { [k]: e.target.value })}
+                        />
+                      )}
+                    </label>
+                  ))}
+                {"value" in s && (
+                  <>
+                    <label>
+                      输入来源
+                      <select
+                        aria-label={`步骤 ${i + 1} 输入来源`}
+                        value={
+                          typeof s.value === "string"
+                            ? "fixed"
+                            : "parameter" in s.value
+                              ? "parameter"
+                              : s.value.credential
+                        }
+                        onChange={(e) => {
+                          const kind = e.target.value;
+                          if (kind === "parameter" && !flow.parameters.length) {
+                            setError("请先添加运行参数");
+                            return;
+                          }
+                          patch(i, {
+                            value:
+                              kind === "fixed"
+                                ? ""
+                                : kind === "parameter"
+                                  ? { parameter: flow.parameters[0].name }
+                                  : { credential: kind },
+                          });
+                        }}
+                      >
+                        <option value="fixed">固定值</option>
+                        <option value="parameter">运行参数</option>
+                        <option value="username">已保存账号</option>
+                        <option value="password">已保存密码</option>
+                      </select>
+                    </label>
+                    {typeof s.value === "string" ? (
+                      <label>
+                        固定值
+                        <input
+                          value={s.value}
+                          onChange={(e) => patch(i, { value: e.target.value })}
+                        />
+                      </label>
+                    ) : "parameter" in s.value ? (
+                      <label>
+                        绑定参数
+                        <select
+                          value={s.value.parameter}
+                          onChange={(e) =>
+                            patch(i, { value: { parameter: e.target.value } })
+                          }
+                        >
+                          {flow.parameters.map((p) => (
+                            <option key={p.name} value={p.name}>
+                              {p.label}（{p.name}）
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <p>
+                        运行时读取所选站点凭据，不在流程中保存账号密码正文。
+                      </p>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-        ))}
-        <button
-          type="button"
-          disabled={Boolean(flow.graph) || flow.steps.length >= 100}
-          onClick={() =>
-            setFlow({
-              ...flow,
-              steps: [...flow.steps, { type: "click", selector: "" }],
-            })
-          }
-        >
-          添加步骤
-        </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              disabled={Boolean(flow.graph) || flow.steps.length >= 100}
+              onClick={() =>
+                setFlow({
+                  ...flow,
+                  steps: [...flow.steps, { type: "click", selector: "" }],
+                })
+              }
+            >
+              添加步骤
+            </button>
+          </>
+        )}
         <div className="editor-actions">
           <button type="button" className="primary" onClick={save}>
             保存为新版本

@@ -148,7 +148,36 @@ try {
     `.flow-short:nth-of-type(${app.store.list().findIndex((w) => w.id === version.id) + 1})`,
   ]);
   await ui.command(["wait", ".graph-heading button"]);
-  await ui.command(["click", ".graph-heading button"]);
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        "document.body.innerText.includes('查看保存的')",
+      ])
+    ).result,
+    false,
+  );
+  await ui.command(["click", '[data-node-id="fill"]']);
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        "document.querySelector('.node-actions').innerText.includes('单步测试')",
+      ])
+    ).result,
+    true,
+  );
+  await ui.command(["click", '[data-node-id="empty"]']);
+  assert.equal(
+    (
+      await ui.command([
+        "eval",
+        "document.querySelector('.node-actions') === null",
+      ])
+    ).result,
+    true,
+  );
+  await ui.command(["click", 'text:{"text":"编辑流程图","match":"exact"}']);
   await ui.command(["scrollintoview", '[data-node-id="fill"]']);
   const rawRect = (
     await ui.command([
@@ -225,6 +254,50 @@ try {
     "UI data state missing",
   );
   await ui.command(["screenshot", resolve("data/ui-graph-data.png")]);
+  await ui.command(["click", '[data-node-id="fill"]']);
+  await ui.command(["eval", "window.confirm = () => true"]);
+  await until(
+    async () =>
+      (
+        await ui.command([
+          "eval",
+          "Array.from(document.querySelectorAll('.node-actions button')).some(b => b.textContent.trim() === '单步测试' && !b.disabled)",
+        ])
+      ).result === true,
+    "node action still disabled: 单步测试",
+  );
+  await ui.command(["click", 'text:{"text":"单步测试","match":"exact"}']);
+  console.log("UI action: 单步测试");
+  await until(async () => {
+    const result = await app.browser.command(["get", "value", "#product"]);
+    return result.value === "无数据";
+  }, "node test did not execute selected fill");
+  await until(
+    async () =>
+      (
+        await ui.command([
+          "eval",
+          "Array.from(document.querySelectorAll('.node-actions button')).some(b => b.textContent.trim() === '手动选元素' && !b.disabled)",
+        ])
+      ).result === true,
+    "node action still disabled: 手动选元素",
+  );
+  await ui.command(["click", 'text:{"text":"手动选元素","match":"exact"}']);
+  console.log("UI action: 手动选元素");
+  await ui.command(["wait", "300"]);
+  await until(
+    async () =>
+      (
+        await ui.command([
+          "eval",
+          "Array.from(document.querySelectorAll('.node-actions button')).some(b => b.textContent.trim() === '取消选择' && !b.disabled)",
+        ])
+      ).result === true,
+    "node action still disabled: 取消选择",
+  );
+  await ui.command(["click", 'text:{"text":"取消选择","match":"exact"}']);
+  console.log("UI action: 取消选择");
+  await ui.command(["wait", "300"]);
   console.log(
     "PASS graph UI add/delete/save version, empty ends without download, data path downloads completed CSV, correct node highlights, 0 model calls, old sequential version preserved",
   );

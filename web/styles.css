@@ -1284,3 +1284,49 @@ textarea::placeholder {
     border-top: 1px solid #e4e8ee;
   }
 }
+.graph-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.node-inspector-heading {
+  border-bottom: 1px solid #e4e8ee;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+}
+.node-inspector-heading small {
+  color: #64748b;
+}
+.node-inspector-heading h3 {
+  margin: 6px 0 0;
+  font-size: 16px;
+}
+.node-actions {
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e4e8ee;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.node-actions h3,
+.node-actions p {
+  width: 100%;
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.node-actions h3 {
+  font-size: 13px;
+}
+.node-actions button {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.node-actions button:last-child {
+  background: #edf3ff;
+  color: #2055cd;
+  border-color: #b9cbe9;
+}
+.graph-inspector {
+  width: auto;
+}
